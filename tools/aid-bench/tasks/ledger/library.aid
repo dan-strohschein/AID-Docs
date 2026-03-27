@@ -1,0 +1,251 @@
+@module ledger
+@lang python
+@version 1.0.0
+@stability stable
+@purpose Double-entry bookkeeping ledger with account types, balanced transactions, and period closing
+@aid_version 0.1
+
+---
+
+@type AccountType
+@kind enum
+@purpose Classification of accounts that determines normal balance direction
+@variants
+  | ASSET — increases with debits, decreases with credits. Normal balance: debit.
+  | LIABILITY — increases with credits, decreases with debits. Normal balance: credit.
+  | EQUITY — increases with credits, decreases with debits. Normal balance: credit.
+  | REVENUE — increases with credits, decreases with debits. Normal balance: credit.
+  | EXPENSE — increases with debits, decreases with credits. Normal balance: debit.
+@invariants
+  - ASSET and EXPENSE have debit-normal balance
+  - LIABILITY, REVENUE, and EQUITY have credit-normal balance
+  - balance() returns positive when account has entries in its normal direction
+
+---
+
+@type EntryType
+@kind enum
+@purpose Debit or credit side of a ledger entry
+@variants
+  | DEBIT — left side of the accounting equation
+  | CREDIT — right side of the accounting equation
+
+---
+
+@type TransactionState
+@kind enum
+@purpose State machine for transaction lifecycle
+@variants
+  | DRAFT — initial state. Entries can be added.
+  | VERIFIED — verify() succeeded. Ready to post.
+  | POSTED — posted to the ledger. Immutable.
+  | VOID — reversed by void(). Immutable.
+@invariants
+  - Valid transitions: DRAFT→VERIFIED→POSTED→VOID
+  - Adding entries to a VERIFIED transaction resets it to DRAFT
+  - POSTED and VOID transactions cannot be modified
+
+---
+
+@type Ledger
+@kind class
+@purpose Central ledger that holds accounts, transactions, and period closures
+@constructors Ledger()
+@methods create_account, get_account, create_transaction, close_period, trial_balance
+
+---
+
+@fn Ledger.create_account
+@purpose Create a new account in the ledger
+@sig (mut self, name: str, account_type: str | AccountType, number: str) -> Account
+@params
+  name: Unique account name. Required.
+  account_type: One of AccountType enum values, or string: "asset", "liability", "equity", "revenue", "expense".
+  number: Unique account number string (e.g., "1000"). Required.
+@errors
+  LedgerError — account name or number already exists
+
+---
+
+@fn Ledger.get_account
+@purpose Look up an account by name or number
+@sig (self, name_or_number: str) -> Account
+@errors
+  LedgerError — account not found
+
+---
+
+@fn Ledger.create_transaction
+@purpose Create a new draft transaction
+@sig (mut self, date: str, memo?: str) -> Transaction
+@params
+  date: Transaction date as "YYYY-MM-DD" string. Required.
+  memo: Description of the transaction. Optional but verify() warns if missing.
+@returns Transaction in DRAFT state
+@post Transaction is added to ledger but NOT posted. Must call verify() then post().
+
+---
+
+@fn Ledger.close_period
+@purpose Close a month so no new transactions can be posted to it
+@sig (mut self, period: str) -> None
+@params
+  period: Period to close in "YYYY-MM" format (e.g., "2024-01").
+@post Any future post() calls for transactions dated in this period will raise PeriodClosedError. Existing posted transactions are unaffected. create_transaction() and verify() still work for closed periods — only post() is blocked.
+
+---
+
+@fn Ledger.trial_balance
+@purpose Compute all account balances and verify they balance
+@sig (self, as_of?: str) -> dict[str, float]
+@params
+  as_of: Optional date cutoff "YYYY-MM-DD". Only includes transactions on or before this date.
+@returns Dict of {account_name: balance}. Balances are in each account's normal direction.
+@errors
+  IntegrityError — total debit-normal balances don't equal credit-normal balances (should never happen with valid transactions)
+
+---
+
+@type Account
+@kind class
+@purpose A named account with a type that determines balance behavior
+@fields
+  name: str — Account name
+  account_type: AccountType — Determines normal balance direction
+  number: str — Account number
+@constructors None — produced by Ledger.create_account()
+@methods balance, entries
+
+---
+
+@fn Account.balance
+@purpose Compute the running balance from all posted transactions
+@sig (self, as_of?: str) -> float
+@params
+  as_of: Optional date cutoff "YYYY-MM-DD". Only includes transactions on or before this date. Inclusive.
+@returns Balance in the account's NORMAL direction. Positive means the account has entries in its expected direction. For example: a $500 credit to a Revenue account returns +500.0 (because Revenue is credit-normal). A $500 credit to an Asset account returns -500.0 (because Asset is debit-normal).
+@post Only includes POSTED transactions. Draft, verified, and void transactions are excluded.
+
+---
+
+@fn Account.entries
+@purpose Get all posted entries for this account
+@sig (self, start?: str, end?: str) -> [Entry]
+@params
+  start: Optional start date "YYYY-MM-DD". Inclusive.
+  end: Optional end date "YYYY-MM-DD". Inclusive.
+
+---
+
+@type Transaction
+@kind class
+@purpose A financial transaction containing balanced debit and credit entries
+@fields
+  date: str — Transaction date "YYYY-MM-DD"
+  memo: str? — Description. verify() warns if empty.
+  state: TransactionState — Current lifecycle state
+  entries: [Entry] — List of debit and credit entries
+@constructors None — produced by Ledger.create_transaction()
+@methods add_entry, verify, post, void
+@invariants
+  - Entries can only be added in DRAFT or VERIFIED state
+  - Adding an entry to a VERIFIED transaction resets state to DRAFT
+  - Total debits must equal total credits for verify() to succeed
+
+---
+
+@fn Transaction.add_entry
+@purpose Add a debit or credit entry to this transaction
+@sig (mut self, account: Account, amount: float, entry_type: str | EntryType) -> None
+@params
+  account: Target account. Required.
+  amount: Entry amount. Must be > 0.
+  entry_type: "debit" or "credit", or EntryType enum value.
+@errors
+  AlreadyPostedError — transaction is posted or voided
+  LedgerError — amount is not positive
+@post If transaction was VERIFIED, state resets to DRAFT (must re-verify)
+
+---
+
+@fn Transaction.verify
+@purpose Check that the transaction is balanced and ready to post
+@sig (mut self) -> VerifyResult
+@returns VerifyResult with .ok (bool), .warnings (list), .errors (list). Does NOT raise on failure.
+@post If no errors, state changes to VERIFIED. If errors, state stays DRAFT.
+@related Transaction.post
+
+---
+
+@fn Transaction.post
+@purpose Post the transaction to the ledger, making it permanent
+@sig (mut self) -> None
+@errors
+  UnverifiedError — transaction is still in DRAFT state (must call verify() first)
+  AlreadyPostedError — transaction is already POSTED or VOID
+  PeriodClosedError — transaction date falls in a closed period
+@pre Transaction must be in VERIFIED state
+@post State changes to POSTED. Entries are now included in balance calculations.
+
+---
+
+@fn Transaction.void
+@purpose Void a posted transaction by creating automatic reverse entries
+@sig (mut self) -> None
+@pre Transaction must be in POSTED state
+@post State changes to VOID. A new reversing transaction is automatically created and posted.
+@errors
+  LedgerError — transaction is not in POSTED state
+
+---
+
+@type VerifyResult
+@kind struct
+@purpose Result of Transaction.verify() — check .ok before posting
+@fields
+  ok: bool — True if transaction can be posted. False if there are errors.
+  warnings: [str] — Non-fatal issues (e.g., missing memo). Transaction can still be posted.
+  errors: [str] — Fatal issues (e.g., unbalanced). Transaction cannot be posted until fixed.
+
+---
+
+@type Entry
+@kind struct
+@purpose A single debit or credit line in a transaction
+@fields
+  account: Account — The account this entry affects
+  amount: float — Entry amount (always positive)
+  entry_type: EntryType — DEBIT or CREDIT
+  transaction: Transaction — Parent transaction
+
+---
+
+@workflow post_transaction
+@purpose Create, validate, and post a balanced transaction
+@steps
+  1. Create: txn = ledger.create_transaction("2024-01-15", memo="Sale")
+  2. Add entries: txn.add_entry(cash, 500.0, EntryType.DEBIT) and txn.add_entry(revenue, 500.0, EntryType.CREDIT)
+  3. Verify: result = txn.verify() — returns VerifyResult, does NOT raise
+  4. Check: if result.ok then proceed, else fix errors and re-verify
+  5. Post: txn.post() — raises if not verified or period closed
+@errors_at
+  step 3: verify() returns VerifyResult with .errors if debits != credits
+  step 5: UnverifiedError if verify() not called, PeriodClosedError if period is closed
+@antipatterns
+  - Don't skip verify(). post() raises UnverifiedError if you do.
+  - Don't assume verify() raises — it returns a result object. Check .ok.
+  - Don't try to post() twice — raises AlreadyPostedError.
+  - Don't forget both sides of the entry. Debits must equal credits.
+
+---
+
+@workflow query_balance
+@purpose Check an account's balance, optionally at a point in time
+@steps
+  1. Get account: acct = ledger.get_account("Cash") or use the reference from create_account()
+  2. Query: balance = acct.balance() for current, or acct.balance(as_of="2024-01-31") for historical
+@antipatterns
+  - Don't expect raw debit/credit totals. balance() returns the NORMAL-direction balance.
+  - Asset/Expense: positive = more debits than credits.
+  - Liability/Revenue/Equity: positive = more credits than debits.
+  - Don't forget that only POSTED transactions are included in balances.

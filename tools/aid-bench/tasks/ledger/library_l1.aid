@@ -1,0 +1,213 @@
+// [generated] Layer 1 mechanical extraction — not yet reviewed
+
+@module ledger
+@lang python
+@version 0.0.0
+@purpose Double-entry bookkeeping ledger — synthetic library for AID benchmarking.
+@aid_version 0.1
+
+---
+
+@type AccountType
+@kind enum
+@variants
+  | ASSET('asset')
+  | LIABILITY('liability')
+  | EQUITY('equity')
+  | REVENUE('revenue')
+  | EXPENSE('expense')
+
+---
+
+@type EntryType
+@kind enum
+@variants
+  | DEBIT('debit')
+  | CREDIT('credit')
+
+---
+
+@type TransactionState
+@kind enum
+@variants
+  | DRAFT('draft')
+  | VERIFIED('verified')
+  | POSTED('posted')
+  | VOID('void')
+
+---
+
+@type LedgerError
+@kind class
+@extends Exception
+
+---
+
+@type UnverifiedError
+@kind class
+@extends LedgerError
+
+---
+
+@type AlreadyPostedError
+@kind class
+@extends LedgerError
+
+---
+
+@type PeriodClosedError
+@kind class
+@extends LedgerError
+
+---
+
+@type UnbalancedError
+@kind class
+@extends LedgerError
+
+---
+
+@type IntegrityError
+@kind class
+@extends LedgerError
+
+---
+
+@type Entry
+@kind struct
+@fields
+  account: Account
+  amount: float
+  entry_type: EntryType
+  transaction: Transaction
+
+---
+
+@type VerifyResult
+@kind struct
+@fields
+  ok: bool
+  warnings: [str] — Default field(default_factory=list).
+  errors: [str] — Default field(default_factory=list).
+
+---
+
+@type Account
+@kind class
+@fields
+  name: str
+  account_type: AccountType
+  number: str
+  ledger: Ledger
+@constructors Account(name: str, account_type: AccountType, number: str, ledger: Ledger)
+@methods balance, entries
+@implements [Debug]
+
+---
+
+@fn Account.balance
+@purpose Compute the running balance for this account.
+@sig (self, as_of?: str?) -> float
+@params
+  as_of: str? — Default None.
+
+---
+
+@fn Account.entries
+@purpose Get all posted entries for this account, optionally filtered by date range.
+@sig (self, start?: str?, end?: str?) -> [Entry]
+@params
+  start: str? — Default None.
+  end: str? — Default None.
+
+---
+
+@type Transaction
+@kind class
+@fields
+  date: str
+  memo: str?
+  ledger: Ledger
+@constructors Transaction(date: str, memo: str?, ledger: Ledger)
+@methods add_entry, verify, post, void
+@implements [Debug]
+
+---
+
+@fn Transaction.add_entry
+@purpose Add an entry to this transaction. Does not validate balance.
+@sig (self, account: Account, amount: float, entry_type: str | EntryType) -> None
+@params
+  account: Account
+  amount: float
+  entry_type: str | EntryType
+
+---
+
+@fn Transaction.verify
+@purpose Verify the transaction is ready to post.
+@sig (self) -> VerifyResult
+
+---
+
+@fn Transaction.post
+@purpose Post the transaction to the ledger.
+@sig (self) -> None
+
+---
+
+@fn Transaction.void
+@purpose Void a posted transaction by creating reverse entries.
+@sig (self) -> None
+
+---
+
+@type Ledger
+@kind class
+@constructors Ledger()
+@methods create_account, get_account, create_transaction, close_period, trial_balance
+
+---
+
+@fn Ledger.create_account
+@purpose Create a new account in the ledger.
+@sig (self, name: str, account_type: str | AccountType, number: str) -> Account
+@params
+  name: str
+  account_type: str | AccountType
+  number: str
+
+---
+
+@fn Ledger.get_account
+@purpose Look up an account by name or number.
+@sig (self, name_or_number: str) -> Account
+@params
+  name_or_number: str
+
+---
+
+@fn Ledger.create_transaction
+@purpose Create a new draft transaction.
+@sig (self, date: str, memo?: str?) -> Transaction
+@params
+  date: str
+  memo: str? — Default None.
+
+---
+
+@fn Ledger.close_period
+@purpose Close a period (YYYY-MM format). No new transactions can be posted to closed periods.
+@sig (self, period: str) -> None
+@params
+  period: str
+
+---
+
+@fn Ledger.trial_balance
+@purpose Compute trial balance — all account balances.
+@sig (self, as_of?: str?) -> dict[str, float]
+@params
+  as_of: str? — Default None.
+@returns dict[str, float]
+
