@@ -6,6 +6,6 @@ dist/
 build/
 .pytest_cache/
 .mypy_cache/
-results/
+# results/ — benchmark results are committed (they're documentation)
 requirements.lock
 requirements-dev.lock
