@@ -1,0 +1,114 @@
+// [generated] Layer 1 mechanical extraction — not yet reviewed
+
+@module csv
+@lang python
+@version 0.0.0
+@purpose csv.py - read/write/investigate CSV files
+@aid_version 0.1
+
+---
+
+@type Dialect
+@kind class
+@purpose Describe a CSV dialect.
+@constructors Dialect()
+
+---
+
+@type excel
+@kind class
+@purpose Describe the usual properties of Excel-generated CSV files.
+@extends Dialect
+
+---
+
+@type excel_tab
+@kind class
+@purpose Describe the usual properties of Excel-generated TAB-delimited files.
+@extends excel
+
+---
+
+@type unix_dialect
+@kind class
+@purpose Describe the usual properties of Unix-generated CSV files.
+@extends Dialect
+
+---
+
+@type DictReader
+@kind class
+@fields
+  f: any
+  fieldnames: any
+  restkey: any
+  restval: any
+  dialect: any
+  fieldnames: any
+@constructors DictReader(f: any, fieldnames?: any, restkey?: any, restval?: any, dialect?: any)
+@methods fieldnames
+@implements [Iterable, Iterator]
+
+---
+
+@fn DictReader.fieldnames
+@sig (self, value: any) -> None
+@params
+  value:
+
+---
+
+@type DictWriter
+@kind class
+@fields
+  f: any
+  fieldnames: any
+  restval: any
+  extrasaction: any
+  dialect: any
+@constructors DictWriter(f: any, fieldnames: any, restval?: any, extrasaction?: any, dialect?: any)
+@methods writeheader, writerow, writerows
+
+---
+
+@fn DictWriter.writeheader
+@sig (self) -> None
+
+---
+
+@fn DictWriter.writerow
+@sig (self, rowdict: any) -> None
+@params
+  rowdict:
+
+---
+
+@fn DictWriter.writerows
+@sig (self, rowdicts: any) -> None
+@params
+  rowdicts:
+
+---
+
+@type Sniffer
+@kind class
+@purpose "Sniffs" the format of a CSV file (i.e. delimiter, quotechar)
+@constructors Sniffer()
+@methods sniff, has_header
+
+---
+
+@fn Sniffer.sniff
+@purpose Returns a dialect (or None) corresponding to the sample
+@sig (self, sample: any, delimiters?: any) -> None
+@params
+  sample:
+  delimiters: Default None.
+
+---
+
+@fn Sniffer.has_header
+@sig (self, sample: any) -> None
+@params
+  sample:
+

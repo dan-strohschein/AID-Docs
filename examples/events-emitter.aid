@@ -1,0 +1,204 @@
+@module events/emitter
+@lang python
+@version 1.0.0
+@stability stable
+@purpose Typed event emitter for publish-subscribe communication between components
+@aid_version 0.1
+
+---
+
+@type EventEmitter
+@kind class
+@purpose Central hub for registering listeners and emitting events
+@generic_params E: Event
+@fields
+  (internal) — map of event names to ordered listener lists
+@invariants
+  - listeners for a given event are invoked in registration order
+  - removing a listener during emission is safe — takes effect after current emission completes
+  - an emitter with no listeners for an event silently discards that event
+@constructors
+  EventEmitter{} — empty emitter with no listeners
+@methods on, once, off, emit, listeners, listener_count, remove_all
+@implements [Debug]
+@related Listener, Event
+
+---
+
+@type Listener
+@kind struct
+@purpose Handle to a registered event listener, used for removal
+@fields
+  id: int — unique identifier within the emitter. Assigned on registration.
+  event: str — event name this listener is registered for.
+  active: bool — true if listener will fire on next emit. false after removal.
+@invariants
+  - id is unique per emitter instance, not globally
+  - active is true on construction, false after off() or after once() fires
+@constructors None — produced by EventEmitter.on() and EventEmitter.once()
+@related EventEmitter.on, EventEmitter.off
+
+---
+
+@type Event
+@kind trait
+@purpose Base type for all events passed through the emitter
+@requires
+  fn name(self) -> str
+@related EventEmitter.emit
+
+---
+
+@fn EventEmitter.on
+@purpose Register a listener that fires every time the named event is emitted
+@sig [E](mut self, event: str, callback: fn(E) -> None) -> Listener
+@params
+  event: Event name to listen for. Case-sensitive. Required.
+  callback: Function called with the event payload each time the event fires. Must accept one argument of type E.
+@returns Listener handle. Use with off() to remove.
+@post listener_count(event) increases by 1
+@thread_safety Safe if emitter is not shared across threads. For shared emitters, caller must synchronize.
+@complexity O(1)
+@related EventEmitter.once, EventEmitter.off
+
+---
+
+@fn EventEmitter.once
+@purpose Register a listener that fires only once, then auto-removes
+@sig [E](mut self, event: str, callback: fn(E) -> None) -> Listener
+@params
+  event: Event name to listen for. Case-sensitive. Required.
+  callback: Function called with the event payload on first emit only.
+@returns Listener handle. Can be used with off() to remove before it fires.
+@post listener_count(event) increases by 1. After the event fires once, listener_count(event) decreases by 1.
+@thread_safety Same as on().
+@complexity O(1)
+@related EventEmitter.on, EventEmitter.off
+
+---
+
+@fn EventEmitter.off
+@purpose Remove a previously registered listener
+@sig (mut self, listener: Listener) -> bool
+@params
+  listener: Listener handle returned by on() or once(). Required.
+@returns true if listener was active and removed. false if already removed or not found.
+@post listener.active is false. listener_count(event) decreases by 1 if removed.
+@thread_safety Same as on().
+@complexity O(n) where n = number of listeners for that event
+@related EventEmitter.on, EventEmitter.remove_all
+
+---
+
+@fn EventEmitter.emit
+@purpose Fire an event, invoking all registered listeners in order
+@sig [E](mut self, event: str, payload: E) -> int
+@params
+  event: Event name to fire. Case-sensitive. Required.
+  payload: Data passed to each listener's callback. Required.
+@returns Number of listeners that were invoked. 0 if no listeners registered.
+@post All active listeners for this event have been called with payload. once() listeners are removed after invocation.
+@effects [Callback]
+@thread_safety Not safe. Emission must not overlap with registration/removal on the same emitter without synchronization.
+@complexity O(n) where n = number of listeners for this event
+@related EventEmitter.on, EventEmitter.once
+
+---
+
+@fn EventEmitter.listeners
+@purpose Get all active listeners for a given event
+@sig (self, event: str) -> [Listener]
+@params
+  event: Event name. Case-sensitive. Required.
+@returns List of active Listener handles, in registration order. Empty list if no listeners.
+@complexity O(n)
+@related EventEmitter.listener_count
+
+---
+
+@fn EventEmitter.listener_count
+@purpose Get the number of active listeners for a given event
+@sig (self, event: str) -> int
+@params
+  event: Event name. Case-sensitive. Required.
+@returns Number of active listeners. Always >= 0.
+@complexity O(1)
+@related EventEmitter.listeners
+
+---
+
+@fn EventEmitter.remove_all
+@purpose Remove all listeners, optionally filtered by event name
+@sig (mut self, event?: str) -> int
+@params
+  event: If provided, remove listeners only for this event. If omitted, remove all listeners for all events.
+@returns Number of listeners removed.
+@post listener_count(event) == 0 for affected events.
+@complexity O(n) where n = number of listeners removed
+@related EventEmitter.off
+
+---
+
+@workflow basic_pub_sub
+@purpose Register listeners, emit events, clean up
+@steps
+  1. Create: EventEmitter{} — create emitter instance
+  2. Register: emitter.on(event, callback) — attach listeners, save returned handles
+  3. Emit: emitter.emit(event, payload) — fire event, all listeners invoked in order
+  4. Cleanup: emitter.off(handle) or emitter.remove_all() — remove listeners when done
+@antipatterns
+  - Don't ignore the Listener handle from on(). Without it, you cannot remove the listener.
+  - Don't register listeners inside a callback for the same event. Causes unbounded listener growth.
+  - Don't throw exceptions in callbacks. One failing listener prevents subsequent listeners from running.
+  - Don't assume emit() is async. Listeners are invoked synchronously in registration order.
+@example
+  emitter := EventEmitter{}
+  handle := emitter.on("user_login", fn(user: User) -> None {
+    log.info("User logged in: " + user.name)
+  })
+  emitter.emit("user_login", current_user)  // returns 1
+  emitter.off(handle)
+
+---
+
+@workflow scoped_listener_lifecycle
+@purpose Register listeners tied to a component's lifecycle, auto-cleanup on teardown
+@steps
+  1. Init: Store emitter reference and empty listener list on component
+  2. Activate: Register listeners with on()/once(), collect handles in list
+  3. Operate: Events flow through listeners during component lifetime
+  4. Teardown: Iterate stored handles, call off() for each — or call remove_all()
+@antipatterns
+  - Don't rely on garbage collection to remove listeners. Listeners hold a reference to the callback, which may hold references to the component — creating a memory leak cycle.
+  - Don't use once() as a substitute for proper cleanup. If the event never fires, the listener persists forever.
+@example
+  component.listeners := []
+  component.listeners.append(emitter.on("data", component.handle_data))
+  component.listeners.append(emitter.on("error", component.handle_error))
+  // ... later, on teardown:
+  for handle in component.listeners {
+    emitter.off(handle)
+  }
+  component.listeners.clear()
+
+---
+
+@workflow error_handling_in_listeners
+@purpose Prevent one failing listener from breaking the entire event chain
+@steps
+  1. Wrap: Each callback should handle its own errors internally
+  2. Fallback: Register an "error" event listener to catch and log failures
+  3. Emit errors: Callbacks that catch errors re-emit as error events
+@antipatterns
+  - Don't let exceptions propagate out of callbacks. Unhandled exceptions in listener N prevent listeners N+1..M from running.
+  - Don't silently swallow errors. Re-emit them so centralized error handling can log or alert.
+@example
+  emitter.on("error", fn(err: Error) -> None {
+    log.error("Listener error: " + err.message)
+  })
+  emitter.on("data", fn(data: Data) -> None {
+    result := process(data)
+    if result.is_err() {
+      emitter.emit("error", result.err())
+    }
+  })

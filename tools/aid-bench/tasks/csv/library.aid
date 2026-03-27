@@ -1,0 +1,153 @@
+@module csv
+@lang python
+@version 3.10
+@stability stable
+@purpose Read and write CSV (Comma Separated Values) tabular data
+@aid_version 0.1
+
+---
+
+@fn reader
+@purpose Create a reader that iterates over rows in a CSV source
+@sig (csvfile: any, dialect?: str, **fmtparams: any) -> any
+@params
+  csvfile: Iterable of strings (file object, StringIO, list of strings). When opening files, use newline=''.
+  dialect: Dialect name. Default "excel".
+  delimiter: Field separator. Default ",". Use "\t" for TSV.
+  quotechar: Quote character. Default '"'.
+  quoting: Quoting behavior. One of: csv.QUOTE_MINIMAL, csv.QUOTE_ALL, csv.QUOTE_NONNUMERIC, csv.QUOTE_NONE.
+@returns Iterator yielding rows as lists of strings
+@related DictReader, writer
+
+---
+
+@fn writer
+@purpose Create a writer that converts data to CSV format
+@sig (csvfile: any, dialect?: str, **fmtparams: any) -> any
+@params
+  csvfile: File-like object with write() method (file, StringIO). When opening files, use newline=''.
+  dialect: Dialect name. Default "excel".
+  delimiter: Field separator. Default ",".
+  quotechar: Quote character. Default '"'.
+  quoting: Quoting behavior. Default csv.QUOTE_MINIMAL.
+@returns Writer object with writerow() and writerows() methods
+@related DictWriter, reader
+
+---
+
+@type DictReader
+@kind class
+@purpose CSV reader that maps each row to a dict using the header as keys
+@constructors DictReader(f, fieldnames?: [str], restkey?: str, restval?: str, dialect?: str)
+@fields
+  fieldnames: [str] — Column names. If None, first row of CSV is used as header.
+@invariants
+  - If fieldnames is None, the first row is consumed as the header
+  - Each iteration yields an OrderedDict (Python 3.7+: regular dict) with fieldname keys
+@related reader, DictWriter
+
+---
+
+@type DictWriter
+@kind class
+@purpose CSV writer that maps dicts to rows using fieldnames
+@constructors DictWriter(f, fieldnames: [str], restval?: str, extrasaction?: str, dialect?: str)
+@fields
+  fieldnames: [str] — Column names in output order. Required.
+@methods writeheader, writerow, writerows
+@invariants
+  - writeheader() MUST be called before writerow()/writerows() to output the header row
+  - fieldnames determines column order in output
+@related writer, DictReader
+
+---
+
+@fn DictWriter.writeheader
+@purpose Write the header row (fieldnames) to the output
+@sig (mut self) -> None
+@pre Must be called BEFORE writerow()/writerows(). Omitting this produces data without a header.
+@post Header row written to output
+
+---
+
+@fn DictWriter.writerow
+@purpose Write a single dict as a CSV row
+@sig (mut self, rowdict: dict[str, str]) -> None
+@params
+  rowdict: Dict with keys matching fieldnames. Missing keys use restval.
+@errors
+  ValueError — dict contains keys not in fieldnames (when extrasaction='raise')
+
+---
+
+@fn DictWriter.writerows
+@purpose Write multiple dicts as CSV rows
+@sig (mut self, rowdicts: [dict[str, str]]) -> None
+
+---
+
+@const QUOTE_ALL
+@purpose Quote every field regardless of content
+@type int
+@value 1
+
+---
+
+@const QUOTE_MINIMAL
+@purpose Quote fields only when they contain the delimiter, quotechar, or newline
+@type int
+@value 0
+
+---
+
+@const QUOTE_NONNUMERIC
+@purpose Quote all non-numeric fields. Unquoted fields are converted to floats on read.
+@type int
+@value 2
+
+---
+
+@const QUOTE_NONE
+@purpose Never quote fields. Use escapechar to escape delimiters.
+@type int
+@value 3
+
+---
+
+@workflow read_csv_as_dicts
+@purpose Read a CSV file/string and get a list of dicts
+@steps
+  1. Open source: io.StringIO(csv_string) or open(path, newline='')
+  2. Create reader: csv.DictReader(source, delimiter=',')
+  3. Iterate: rows = list(reader) — each row is a dict with header keys
+@antipatterns
+  - Don't forget newline='' when opening files. Without it, you get double newlines on Windows.
+  - Don't assume values are typed. All values from csv.reader/DictReader are strings.
+
+---
+
+@workflow write_csv_from_dicts
+@purpose Write a list of dicts to CSV format
+@steps
+  1. Open target: io.StringIO() or open(path, 'w', newline='')
+  2. Create writer: csv.DictWriter(target, fieldnames=['col1', 'col2'])
+  3. Write header: writer.writeheader() — REQUIRED, outputs the column names
+  4. Write rows: writer.writerows(list_of_dicts) or writer.writerow(dict) for each
+  5. Get result: target.getvalue() for StringIO, or close file
+@antipatterns
+  - Don't forget writeheader(). Without it, the output has no header row.
+  - Don't forget newline='' when opening files for writing.
+  - Don't use csv.writer when you have dicts. Use DictWriter to avoid manual key ordering.
+
+---
+
+@workflow handle_special_characters
+@purpose Write CSV with fields containing commas, quotes, or newlines
+@steps
+  1. Choose quoting: csv.QUOTE_ALL quotes everything, QUOTE_MINIMAL quotes only when needed
+  2. Create writer: csv.writer(buf, quoting=csv.QUOTE_ALL)
+  3. Write: writer.writerow(['field, with comma', 'field "with" quotes'])
+  4. Result: Fields are properly quoted and internal quotes are doubled ("" escaping)
+@antipatterns
+  - Don't try to handle quoting manually. Let the csv module do it.
+  - Don't use QUOTE_NONE unless you set escapechar — fields with delimiters will corrupt the output.

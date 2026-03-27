@@ -1,0 +1,245 @@
+@module collections/hashmap
+@lang python
+@version 1.0.0
+@stability stable
+@purpose Generic hash map with O(1) average lookup, insertion, and deletion
+@aid_version 0.1
+
+---
+
+@type HashMap
+@kind struct
+@purpose Key-value map using hash-based indexing for fast lookups
+@generic_params K: Hash + Eq, V
+@fields
+  (internal) — hash table with key-value pairs
+@invariants
+  - len is always >= 0
+  - capacity is always >= len
+  - keys are unique — inserting a duplicate key overwrites the value
+  - iteration order is not guaranteed and may change between insertions
+@constructors
+  HashMap{} — empty map with default capacity
+  HashMap.with_capacity(n: int) — empty map pre-allocated for n entries
+  HashMap.from(entries: [(K, V)]) — map from key-value pairs. Last value wins on duplicate keys.
+@methods get, get_or, set, delete, contains, keys, values, entries, len, is_empty, clear, merge, iter
+@implements [Iterable, Display, Debug, Eq, Clone]
+@related collections/list.List, collections/set.HashSet
+
+---
+
+@fn HashMap.get
+@purpose Retrieve value by key
+@sig [K, V](self, key: K) -> V?
+@params
+  key: Lookup key. Must implement Hash + Eq.
+@returns Value if key exists, None if absent
+@complexity O(1) average, O(n) worst case (hash collision)
+@related HashMap.get_or, HashMap.contains
+
+---
+
+@fn HashMap.get_or
+@purpose Retrieve value by key with a fallback default
+@sig [K, V](self, key: K, default: V) -> V
+@params
+  key: Lookup key. Must implement Hash + Eq.
+  default: Value returned if key is absent. Not inserted into the map.
+@returns Value if key exists, default if absent
+@complexity O(1) average
+@related HashMap.get
+
+---
+
+@fn HashMap.set
+@purpose Insert or update a key-value pair
+@sig [K, V](mut self, key: K, value: V) -> V?
+@params
+  key: Key to insert. Must implement Hash + Eq.
+  value: Value to associate with key.
+@returns Previous value if key existed, None if new insertion
+@post len increases by 1 if key was new. Capacity may grow (rehash) if load factor exceeded.
+@complexity O(1) amortized. O(n) when rehashing.
+@related HashMap.delete, HashMap.merge
+
+---
+
+@fn HashMap.delete
+@purpose Remove a key-value pair by key
+@sig [K, V](mut self, key: K) -> V?
+@params
+  key: Key to remove. Must implement Hash + Eq.
+@returns Removed value if key existed, None if absent
+@post len decreases by 1 if key existed
+@complexity O(1) average
+@related HashMap.set, HashMap.clear
+
+---
+
+@fn HashMap.contains
+@purpose Check if a key exists in the map
+@sig [K, V](self, key: K) -> bool
+@params
+  key: Key to check. Must implement Hash + Eq.
+@returns true if key is present
+@complexity O(1) average
+@related HashMap.get
+
+---
+
+@fn HashMap.keys
+@purpose Get all keys in the map
+@sig [K, V](self) -> [K]
+@returns List of all keys. Order is not guaranteed.
+@complexity O(n)
+@related HashMap.values, HashMap.entries
+
+---
+
+@fn HashMap.values
+@purpose Get all values in the map
+@sig [K, V](self) -> [V]
+@returns List of all values. Order matches keys() order. May contain duplicates.
+@complexity O(n)
+@related HashMap.keys, HashMap.entries
+
+---
+
+@fn HashMap.entries
+@purpose Get all key-value pairs in the map
+@sig [K, V](self) -> [(K, V)]
+@returns List of (key, value) tuples. Order is not guaranteed.
+@complexity O(n)
+@related HashMap.keys, HashMap.values, HashMap.iter
+
+---
+
+@fn HashMap.len
+@purpose Get the number of key-value pairs
+@sig [K, V](self) -> int
+@returns Number of entries. Always >= 0.
+@complexity O(1)
+@related HashMap.is_empty
+
+---
+
+@fn HashMap.is_empty
+@purpose Check if the map contains no entries
+@sig [K, V](self) -> bool
+@returns true if len == 0
+@complexity O(1)
+@related HashMap.len
+
+---
+
+@fn HashMap.clear
+@purpose Remove all entries from the map
+@sig [K, V](mut self) -> None
+@post len == 0. Capacity is not reduced.
+@complexity O(n)
+@related HashMap.delete
+
+---
+
+@fn HashMap.merge
+@purpose Merge another map into this one
+@sig [K, V](mut self, other: HashMap[K, V]) -> None
+@params
+  other: Map to merge in. On key conflicts, other's values overwrite self's values.
+@post self contains all keys from both maps. other is unchanged.
+@complexity O(m) where m = other.len. O(n + m) if rehashing.
+@related HashMap.set
+
+---
+
+@fn HashMap.iter
+@purpose Get an iterator over key-value pairs
+@sig [K, V](self) -> Iterator[(K, V)]
+@returns Iterator yielding (key, value) tuples. Order is not guaranteed.
+@post Modifying the map during iteration invalidates the iterator (undefined behavior).
+@complexity O(1) to create. O(n) to fully consume.
+@related HashMap.entries, HashMap.keys, HashMap.values
+
+---
+
+@fn HashMap.with_capacity
+@purpose Create an empty map pre-allocated for a given number of entries
+@sig [K, V](capacity: int) -> HashMap[K, V]
+@params
+  capacity: Number of entries to pre-allocate for. Must be >= 0.
+@returns Empty HashMap with internal storage for at least capacity entries without rehashing
+@complexity O(n) where n = capacity
+@related HashMap.from
+
+---
+
+@fn HashMap.from
+@purpose Create a map from a list of key-value pairs
+@sig [K, V](entries: [(K, V)]) -> HashMap[K, V]
+@params
+  entries: Key-value pairs. Duplicate keys allowed — last value wins.
+@returns HashMap containing all entries
+@complexity O(n) where n = entries.len
+@related HashMap.with_capacity
+
+---
+
+@trait Hash
+@purpose Type can produce a hash value for use in hash-based collections
+@requires
+  fn hash(self) -> int
+@implementors [str, int, float, bool, bytes, (T...) where T: Hash]
+@related Eq, HashMap
+
+---
+
+@trait Eq
+@purpose Type supports equality comparison
+@requires
+  fn eq(self, other: Self) -> bool
+@provided
+  fn ne(self, other: Self) -> bool
+@implementors [str, int, float, bool, bytes, [T] where T: Eq, HashMap[K, V] where K: Eq, V: Eq]
+@related Hash
+
+---
+
+@workflow hashmap_crud
+@purpose Create a map, insert entries, look up values, and iterate
+@steps
+  1. Create: HashMap{} or HashMap.with_capacity(n) — allocate map
+  2. Populate: map.set(key, value) — insert entries, check return for overwrites
+  3. Query: map.get(key) or map.contains(key) — look up values
+  4. Update: map.set(key, new_value) — overwrite returns previous value
+  5. Remove: map.delete(key) — remove returns previous value or None
+  6. Iterate: map.iter() or map.keys()/values()/entries() — traverse contents
+@antipatterns
+  - Don't modify the map while iterating with iter(). Invalidates the iterator.
+  - Don't assume insertion order is preserved. Use an ordered map if order matters.
+  - Don't use mutable types as keys. If the key's hash changes after insertion, the entry becomes unreachable.
+  - Don't call get() then set() to update. Use set() directly — it returns the old value.
+@example
+  scores := HashMap{}
+  scores.set("alice", 100)
+  scores.set("bob", 85)
+  prev := scores.set("alice", 110)  // prev == 100
+  for (name, score) in scores.iter() {
+    print("{name}: {score}")
+  }
+
+---
+
+@workflow hashmap_aggregation
+@purpose Accumulate values by key (counting, grouping, summing)
+@steps
+  1. Create: HashMap{} — start with empty map
+  2. For each item: Check map.get(key) — get current value or None
+  3. Update: map.set(key, new_value) — set initial or accumulated value
+@antipatterns
+  - Don't use contains() + get() + set() separately. Use get_or() + set() for cleaner accumulation.
+@example
+  counts := HashMap{}
+  for word in words {
+    n := counts.get_or(word, 0)
+    counts.set(word, n + 1)
+  }

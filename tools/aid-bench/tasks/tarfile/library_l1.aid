@@ -1,0 +1,523 @@
+// [generated] Layer 1 mechanical extraction — not yet reviewed
+
+@module tarfile
+@lang python
+@version 0.0.0
+@purpose Read from and write to tar format archives.
+@aid_version 0.1
+
+---
+
+@const USTAR_FORMAT
+@type int
+@value 0
+
+---
+
+@const GNU_FORMAT
+@type int
+@value 1
+
+---
+
+@const PAX_FORMAT
+@type int
+@value 2
+
+---
+
+@const DEFAULT_FORMAT
+@type any
+@value PAX_FORMAT
+
+---
+
+@type TarError
+@kind class
+@purpose Base exception.
+@extends Exception
+
+---
+
+@type ExtractError
+@kind class
+@purpose General exception for extract errors.
+@extends TarError
+
+---
+
+@type ReadError
+@kind class
+@purpose Exception for unreadable tar archives.
+@extends TarError
+
+---
+
+@type CompressionError
+@kind class
+@purpose Exception for unavailable compression methods.
+@extends TarError
+
+---
+
+@type StreamError
+@kind class
+@purpose Exception for unsupported operations on stream-like TarFiles.
+@extends TarError
+
+---
+
+@type HeaderError
+@kind class
+@purpose Base exception for header errors.
+@extends TarError
+
+---
+
+@type TarInfo
+@kind class
+@purpose Informational class which holds the details about an
+@fields
+  name: any
+  path: any
+  linkpath: any
+@constructors TarInfo(name?: any)
+@methods path, linkpath, replace, get_info, tobuf, create_ustar_header, create_gnu_header, create_pax_header, create_pax_global_header, frombuf, fromtarfile, isreg, isfile, isdir, issym, islnk, ischr, isblk, isfifo, issparse, isdev
+@implements [Debug]
+
+---
+
+@fn TarInfo.path
+@sig (self, name: any) -> None
+@params
+  name:
+
+---
+
+@fn TarInfo.linkpath
+@sig (self, linkname: any) -> None
+@params
+  linkname:
+
+---
+
+@fn TarInfo.replace
+@purpose Return a deep copy of self with the given attributes replaced.
+@sig (self, name?: any, mtime?: any, mode?: any, linkname?: any, uid?: any, gid?: any, uname?: any, gname?: any, deep?: any, _KEEP?: any) -> None
+@params
+  name: Default _KEEP.
+  mtime: Default _KEEP.
+  mode: Default _KEEP.
+  linkname: Default _KEEP.
+  uid: Default _KEEP.
+  gid: Default _KEEP.
+  uname: Default _KEEP.
+  gname: Default _KEEP.
+  deep: Default True.
+  _KEEP: Default _KEEP.
+
+---
+
+@fn TarInfo.get_info
+@purpose Return the TarInfo's attributes as a dictionary.
+@sig (self) -> None
+
+---
+
+@fn TarInfo.tobuf
+@purpose Return a tar header as a string of 512 byte blocks.
+@sig (self, format?: any, encoding?: any, errors?: any) -> None
+@params
+  format: Default DEFAULT_FORMAT.
+  encoding: Default ENCODING.
+  errors: Default 'surrogateescape'.
+
+---
+
+@fn TarInfo.create_ustar_header
+@purpose Return the object as a ustar header block.
+@sig (self, info: any, encoding: any, errors: any) -> None
+@params
+  info:
+  encoding:
+  errors:
+
+---
+
+@fn TarInfo.create_gnu_header
+@purpose Return the object as a GNU header block sequence.
+@sig (self, info: any, encoding: any, errors: any) -> None
+@params
+  info:
+  encoding:
+  errors:
+
+---
+
+@fn TarInfo.create_pax_header
+@purpose Return the object as a ustar header block. If it cannot be
+@sig (self, info: any, encoding: any) -> None
+@params
+  info:
+  encoding:
+
+---
+
+@fn TarInfo.create_pax_global_header
+@purpose Return the object as a pax global header block sequence.
+@sig (pax_headers: any) -> None
+@params
+  pax_headers:
+
+---
+
+@fn TarInfo.frombuf
+@purpose Construct a TarInfo object from a 512 byte bytes object.
+@sig (buf: any, encoding: any, errors: any) -> None
+@params
+  buf:
+  encoding:
+  errors:
+
+---
+
+@fn TarInfo.fromtarfile
+@purpose Return the next TarInfo object from TarFile object
+@sig (tarfile: any) -> None
+@params
+  tarfile:
+
+---
+
+@fn TarInfo.isreg
+@purpose Return True if the Tarinfo object is a regular file.
+@sig (self) -> None
+
+---
+
+@fn TarInfo.isfile
+@purpose Return True if the Tarinfo object is a regular file.
+@sig (self) -> None
+
+---
+
+@fn TarInfo.isdir
+@purpose Return True if it is a directory.
+@sig (self) -> None
+
+---
+
+@fn TarInfo.issym
+@purpose Return True if it is a symbolic link.
+@sig (self) -> None
+
+---
+
+@fn TarInfo.islnk
+@purpose Return True if it is a hard link.
+@sig (self) -> None
+
+---
+
+@fn TarInfo.ischr
+@purpose Return True if it is a character device.
+@sig (self) -> None
+
+---
+
+@fn TarInfo.isblk
+@purpose Return True if it is a block device.
+@sig (self) -> None
+
+---
+
+@fn TarInfo.isfifo
+@purpose Return True if it is a FIFO.
+@sig (self) -> None
+
+---
+
+@fn TarInfo.issparse
+@sig (self) -> None
+
+---
+
+@fn TarInfo.isdev
+@purpose Return True if it is one of character device, block device or FIFO.
+@sig (self) -> None
+
+---
+
+@type TarFile
+@kind class
+@purpose The TarFile Class provides an interface to tar archives.
+@fields
+  name: any
+  mode: any
+  fileobj: any
+  format: any
+  tarinfo: any
+  dereference: any
+  ignore_zeros: any
+  encoding: any
+  errors: any
+  pax_headers: any
+  debug: any
+  errorlevel: any
+  copybufsize: any
+@constructors TarFile(name?: any, mode?: any, fileobj?: any, format?: any, tarinfo?: any, dereference?: any, ignore_zeros?: any, encoding?: any, errors?: any, pax_headers?: any, debug?: any, errorlevel?: any, copybufsize?: any)
+@methods open, taropen, gzopen, bz2open, xzopen, close, getmember, getmembers, getnames, gettarinfo, list, add, addfile, extractall, extract, extractfile, makedir, makefile, makeunknown, makefifo, makedev, makelink, chown, chmod, utime, next
+@implements [Closeable, Iterable]
+
+---
+
+@fn TarFile.open
+@purpose Open a tar archive for reading, writing or appending. Return
+@sig (name?: any, mode?: any, fileobj?: any, bufsize?: any, **kwargs: any) -> None
+@params
+  name: Default None.
+  mode: Default 'r'.
+  fileobj: Default None.
+  bufsize: Default RECORDSIZE.
+
+---
+
+@fn TarFile.taropen
+@purpose Open uncompressed tar archive name for reading or writing.
+@sig (name: any, mode?: any, fileobj?: any, **kwargs: any) -> None
+@params
+  name:
+  mode: Default 'r'.
+  fileobj: Default None.
+
+---
+
+@fn TarFile.gzopen
+@purpose Open gzip compressed tar archive name for reading or writing.
+@sig (name: any, mode?: any, fileobj?: any, compresslevel?: any, **kwargs: any) -> None
+@params
+  name:
+  mode: Default 'r'.
+  fileobj: Default None.
+  compresslevel: Default 9.
+
+---
+
+@fn TarFile.bz2open
+@purpose Open bzip2 compressed tar archive name for reading or writing.
+@sig (name: any, mode?: any, fileobj?: any, compresslevel?: any, **kwargs: any) -> None
+@params
+  name:
+  mode: Default 'r'.
+  fileobj: Default None.
+  compresslevel: Default 9.
+
+---
+
+@fn TarFile.xzopen
+@purpose Open lzma compressed tar archive name for reading or writing.
+@sig (name: any, mode?: any, fileobj?: any, preset?: any, **kwargs: any) -> None
+@params
+  name:
+  mode: Default 'r'.
+  fileobj: Default None.
+  preset: Default None.
+
+---
+
+@fn TarFile.close
+@purpose Close the TarFile. In write-mode, two finishing zero blocks are
+@sig (self) -> None
+
+---
+
+@fn TarFile.getmember
+@purpose Return a TarInfo object for member `name'. If `name' can not be
+@sig (self, name: any) -> None
+@params
+  name:
+
+---
+
+@fn TarFile.getmembers
+@purpose Return the members of the archive as a list of TarInfo objects. The
+@sig (self) -> None
+
+---
+
+@fn TarFile.getnames
+@purpose Return the members of the archive as a list of their names. It has
+@sig (self) -> None
+
+---
+
+@fn TarFile.gettarinfo
+@purpose Create a TarInfo object from the result of os.stat or equivalent
+@sig (self, name?: any, arcname?: any, fileobj?: any) -> None
+@params
+  name: Default None.
+  arcname: Default None.
+  fileobj: Default None.
+
+---
+
+@fn TarFile.list
+@purpose Print a table of contents to sys.stdout. If `verbose' is False, only
+@sig (self, verbose?: any, members?: any) -> None
+@params
+  verbose: Default True.
+  members: Default None.
+
+---
+
+@fn TarFile.add
+@purpose Add the file `name' to the archive. `name' may be any type of file
+@sig (self, name: any, arcname?: any, recursive?: any, filter?: any) -> None
+@params
+  name:
+  arcname: Default None.
+  recursive: Default True.
+  filter: Default None.
+
+---
+
+@fn TarFile.addfile
+@purpose Add the TarInfo object `tarinfo' to the archive. If `fileobj' is
+@sig (self, tarinfo: any, fileobj?: any) -> None
+@params
+  tarinfo:
+  fileobj: Default None.
+
+---
+
+@fn TarFile.extractall
+@purpose Extract all members from the archive to the current working
+@sig (self, path?: any, members?: any, numeric_owner?: any, filter?: any) -> None
+@params
+  path: Default '.'.
+  members: Default None.
+  numeric_owner: Default False.
+  filter: Default None.
+
+---
+
+@fn TarFile.extract
+@purpose Extract a member from the archive to the current working directory,
+@sig (self, member: any, path?: any, set_attrs?: any, numeric_owner?: any, filter?: any) -> None
+@params
+  member:
+  path: Default ''.
+  set_attrs: Default True.
+  numeric_owner: Default False.
+  filter: Default None.
+
+---
+
+@fn TarFile.extractfile
+@purpose Extract a member from the archive as a file object. `member' may be
+@sig (self, member: any) -> None
+@params
+  member:
+
+---
+
+@fn TarFile.makedir
+@purpose Make a directory called targetpath.
+@sig (self, tarinfo: any, targetpath: any) -> None
+@params
+  tarinfo:
+  targetpath:
+
+---
+
+@fn TarFile.makefile
+@purpose Make a file called targetpath.
+@sig (self, tarinfo: any, targetpath: any) -> None
+@params
+  tarinfo:
+  targetpath:
+
+---
+
+@fn TarFile.makeunknown
+@purpose Make a file from a TarInfo object with an unknown type
+@sig (self, tarinfo: any, targetpath: any) -> None
+@params
+  tarinfo:
+  targetpath:
+
+---
+
+@fn TarFile.makefifo
+@purpose Make a fifo called targetpath.
+@sig (self, tarinfo: any, targetpath: any) -> None
+@params
+  tarinfo:
+  targetpath:
+
+---
+
+@fn TarFile.makedev
+@purpose Make a character or block device called targetpath.
+@sig (self, tarinfo: any, targetpath: any) -> None
+@params
+  tarinfo:
+  targetpath:
+
+---
+
+@fn TarFile.makelink
+@purpose Make a (symbolic) link called targetpath. If it cannot be created
+@sig (self, tarinfo: any, targetpath: any) -> None
+@params
+  tarinfo:
+  targetpath:
+
+---
+
+@fn TarFile.chown
+@purpose Set owner of targetpath according to tarinfo. If numeric_owner
+@sig (self, tarinfo: any, targetpath: any, numeric_owner: any) -> None
+@params
+  tarinfo:
+  targetpath:
+  numeric_owner:
+
+---
+
+@fn TarFile.chmod
+@purpose Set file permissions of targetpath according to tarinfo.
+@sig (self, tarinfo: any, targetpath: any) -> None
+@params
+  tarinfo:
+  targetpath:
+
+---
+
+@fn TarFile.utime
+@purpose Set modification time of targetpath according to tarinfo.
+@sig (self, tarinfo: any, targetpath: any) -> None
+@params
+  tarinfo:
+  targetpath:
+
+---
+
+@fn TarFile.next
+@purpose Return the next member of the archive as a TarInfo object, when
+@sig (self) -> None
+
+---
+
+@type open
+@kind alias
+@purpose Alias for open
+
+---
+
+@fn is_tarfile
+@purpose Return True if name points to a tar archive that we
+@sig (name: any) -> None
+@params
+  name:
+

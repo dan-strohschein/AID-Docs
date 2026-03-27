@@ -1,0 +1,23 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aid-gen"
+version = "0.1.0"
+description = "Generate AID (Agent Interface Document) files from Python source code"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+
+[project.scripts]
+aid-gen = "aid_gen.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aid_gen"]
+
+[tool.rye]
+managed = true
+dev-dependencies = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

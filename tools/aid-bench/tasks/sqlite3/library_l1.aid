@@ -1,0 +1,8 @@
+// [generated] Layer 1 mechanical extraction — not yet reviewed
+
+@module sqlite3
+@lang python
+@version 0.0.0
+@purpose The sqlite3 extension module provides a DB-API 2.0 (PEP 249) compliant
+@aid_version 0.1
+

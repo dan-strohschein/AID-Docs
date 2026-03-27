@@ -1,0 +1,370 @@
+@module http/client
+@lang python
+@version 2.31.0
+@stability stable
+@purpose HTTP client library for making web requests and handling responses
+@deps [ssl, dns, url, io]
+@source https://github.com/psf/requests
+@aid_version 0.1
+
+---
+
+@fn get
+@purpose Perform an HTTP GET request and return the response
+@sig (url: str, opts?: RequestOpts) -> Response ! HttpError | TimeoutError
+@params
+  url: Full URL including scheme. Must match ^https?://. Required.
+  opts: Request configuration.
+    .timeout: Duration. Default 30s. Must be > 0.
+    .redirects: int. Default 5. Range [0, 20].
+    .headers: dict[str, str]. Default empty.
+    .verify_ssl: bool. Default true.
+    .auth: (str, str)?. Default None. Tuple of (username, password).
+@returns Response with status code, headers, and body stream
+@errors
+  HttpError.DnsFailure — url domain cannot be resolved
+  HttpError.ConnectionRefused — server not accepting connections on port
+  HttpError.TlsError — certificate validation failed (only when verify_ssl=true)
+  HttpError.NetworkError — connection dropped during transfer
+  HttpError.InvalidUrl — url is malformed or uses unsupported scheme
+  TimeoutError — no response headers received within opts.timeout
+@pre None
+@post Response.body is open. Caller must call body.close() or read to completion.
+@effects [Net]
+@thread_safety Safe. Each call is independent. No shared mutable state.
+@complexity O(1) local setup. Network-bound.
+@since 1.0.0
+@related post, put, delete, head, request, Response, RequestOpts
+@example
+  resp := http.get("https://api.example.com/users")?
+  data := resp.json[[]User]()?
+
+---
+
+@fn post
+@purpose Send an HTTP POST request with a body
+@sig (url: str, body: Body, opts?: RequestOpts) -> Response ! HttpError | TimeoutError
+@params
+  url: Full URL including scheme. Must match ^https?://. Required.
+  body: Request body. One of: str, bytes, dict (auto-serialized to JSON), FormData.
+  opts: Request configuration (same as get).
+@returns Response with status code, headers, and body stream
+@errors
+  HttpError.DnsFailure — url domain cannot be resolved
+  HttpError.ConnectionRefused — server not accepting connections
+  HttpError.TlsError — certificate validation failed
+  HttpError.NetworkError — connection dropped during transfer
+  HttpError.InvalidUrl — url is malformed
+  TimeoutError — no response headers received within opts.timeout
+@pre None
+@post Response.body is open. Caller must close or read to completion.
+@effects [Net]
+@thread_safety Safe.
+@since 1.0.0
+@related get, put, request, Response
+
+---
+
+@fn put
+@purpose Send an HTTP PUT request with a body (full resource replacement)
+@sig (url: str, body: Body, opts?: RequestOpts) -> Response ! HttpError | TimeoutError
+@params
+  url: Full URL including scheme. Must match ^https?://. Required.
+  body: Request body. Same types as post.
+  opts: Request configuration (same as get).
+@returns Response with status code, headers, and body stream
+@errors
+  HttpError.DnsFailure — domain cannot be resolved
+  HttpError.ConnectionRefused — server not accepting connections
+  HttpError.TlsError — certificate validation failed
+  HttpError.NetworkError — connection dropped
+  HttpError.InvalidUrl — malformed URL
+  TimeoutError — no response within timeout
+@effects [Net]
+@since 1.0.0
+@related post, patch, delete, request
+
+---
+
+@fn delete
+@purpose Send an HTTP DELETE request
+@sig (url: str, opts?: RequestOpts) -> Response ! HttpError | TimeoutError
+@params
+  url: Full URL including scheme. Must match ^https?://. Required.
+  opts: Request configuration (same as get).
+@returns Response (typically with empty or confirmation body)
+@errors
+  HttpError.DnsFailure — domain cannot be resolved
+  HttpError.ConnectionRefused — server not accepting connections
+  HttpError.TlsError — certificate validation failed
+  HttpError.NetworkError — connection dropped
+  HttpError.InvalidUrl — malformed URL
+  TimeoutError — no response within timeout
+@effects [Net]
+@since 1.0.0
+@related get, post, put, request
+
+---
+
+@fn head
+@purpose Send an HTTP HEAD request (headers only, no body)
+@sig (url: str, opts?: RequestOpts) -> Response ! HttpError | TimeoutError
+@params
+  url: Full URL including scheme. Must match ^https?://. Required.
+  opts: Request configuration (same as get).
+@returns Response with status and headers. Body is always empty.
+@errors
+  HttpError.DnsFailure — domain cannot be resolved
+  HttpError.ConnectionRefused — server not accepting connections
+  HttpError.TlsError — certificate validation failed
+  HttpError.NetworkError — connection dropped
+  HttpError.InvalidUrl — malformed URL
+  TimeoutError — no response within timeout
+@post Response.body is empty. No close required.
+@effects [Net]
+@since 1.0.0
+@related get, request
+
+---
+
+@fn request
+@purpose Send an HTTP request with any method
+@sig (method: str, url: str, body?: Body, opts?: RequestOpts) -> Response ! HttpError | TimeoutError
+@params
+  method: HTTP method. One of: GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS. Required.
+  url: Full URL including scheme. Must match ^https?://. Required.
+  body: Request body. Optional for methods that don't require a body.
+  opts: Request configuration (same as get).
+@returns Response with status code, headers, and body stream
+@errors
+  HttpError.DnsFailure — domain cannot be resolved
+  HttpError.ConnectionRefused — server not accepting connections
+  HttpError.TlsError — certificate validation failed
+  HttpError.NetworkError — connection dropped
+  HttpError.InvalidUrl — malformed URL
+  HttpError.InvalidMethod — method is not a recognized HTTP method
+  TimeoutError — no response within timeout
+@effects [Net]
+@since 1.0.0
+@related get, post, put, delete, head
+
+---
+
+@type Response
+@kind struct
+@purpose HTTP response containing status, headers, and body stream
+@fields
+  status: int — HTTP status code. Range [100, 599].
+  headers: Headers — Response headers. Always present, may be empty.
+  body: BodyStream — Readable stream. Must be closed when done.
+  url: str — Final URL after all redirects.
+  elapsed: Duration — Time from request sent to headers received.
+  encoding: str? — Response encoding from Content-Type header. None if not specified.
+@invariants
+  - status is always in valid HTTP range [100, 599]
+  - headers is never null
+  - body is open on construction; closed after .close() or full read
+  - url always contains scheme and host
+  - elapsed is always >= 0
+@constructors None — produced by get(), post(), put(), delete(), head(), request()
+@methods json, text, bytes, stream, close, raise_for_status, is_ok, is_redirect, is_error
+@implements [Closeable, Display, Debug]
+@related Headers, BodyStream, HttpError
+
+---
+
+@fn Response.json
+@purpose Parse response body as JSON into a typed value
+@sig [T](mut self) -> T ! ParseError
+@params None — reads from self.body
+@returns Parsed value of type T
+@errors
+  ParseError.InvalidJson — body is not valid JSON
+  ParseError.TypeMismatch — JSON structure doesn't match type T
+@pre self.body is open (not yet consumed)
+@post self.body is closed (stream fully consumed)
+@related Response.text, Response.bytes
+
+---
+
+@fn Response.text
+@purpose Read response body as a string
+@sig (mut self) -> str ! ParseError
+@returns Full body content as string, decoded using self.encoding or UTF-8
+@errors
+  ParseError.InvalidEncoding — body contains invalid bytes for the encoding
+@pre self.body is open
+@post self.body is closed
+@related Response.json, Response.bytes
+
+---
+
+@fn Response.bytes
+@purpose Read response body as raw bytes
+@sig (mut self) -> bytes
+@returns Full body content as byte sequence
+@pre self.body is open
+@post self.body is closed
+@related Response.json, Response.text
+
+---
+
+@fn Response.close
+@purpose Close the response body stream and release the connection
+@sig (mut self) -> None
+@pre None (safe to call multiple times — idempotent)
+@post self.body is closed. Connection returned to pool.
+@related Response.json, Response.text, Response.bytes
+
+---
+
+@fn Response.raise_for_status
+@purpose Raise an error if the response status indicates failure
+@sig (self) -> None ! HttpStatusError
+@errors
+  HttpStatusError.ClientError — status in Range [400, 499]. Includes status and url.
+  HttpStatusError.ServerError — status in Range [500, 599]. Includes status and url.
+@pre None
+@post None (does not consume body)
+@related Response.is_ok, Response.is_error
+
+---
+
+@fn Response.is_ok
+@purpose Check if response status is in the success range
+@sig (self) -> bool
+@returns true if status in Range [200, 299]
+@related Response.is_redirect, Response.is_error, Response.raise_for_status
+
+---
+
+@type RequestOpts
+@kind struct
+@purpose Configuration options for HTTP requests
+@fields
+  timeout: Duration — Max time to wait for response headers. Default 30s. Must be > 0.
+  redirects: int — Max redirects to follow. Default 5. Range [0, 20].
+  headers: dict[str, str] — Additional request headers. Default empty.
+  verify_ssl: bool — Validate TLS certificates. Default true.
+  auth: (str, str)? — Basic auth credentials (username, password). Default None.
+  proxy: str? — Proxy URL. Default None. Must match ^https?:// if set.
+@constructors RequestOpts{} with field defaults, or RequestOpts{timeout: 10s, ...}
+@related Response, get, post
+
+---
+
+@type HttpError
+@kind enum
+@purpose Errors that occur during HTTP request execution
+@extends Exception
+@variants
+  | DnsFailure { domain: str } — could not resolve domain name
+  | ConnectionRefused { host: str, port: int } — server rejected connection
+  | TlsError { reason: str } — TLS/SSL handshake or verification failed
+  | NetworkError { message: str } — connection lost during transfer
+  | InvalidUrl { url: str } — URL is malformed or uses unsupported scheme
+  | InvalidMethod { method: str } — unrecognized HTTP method
+@implements [Error, Display, Debug]
+@related TimeoutError, HttpStatusError
+
+---
+
+@type TimeoutError
+@kind struct
+@purpose Request did not receive response headers within the timeout
+@extends Exception
+@fields
+  timeout: Duration — the timeout that was exceeded
+  url: str — the URL that timed out
+@implements [Error, Display, Debug]
+@related HttpError, RequestOpts.timeout
+
+---
+
+@type HttpStatusError
+@kind enum
+@purpose HTTP response indicated an error status code
+@extends Exception
+@variants
+  | ClientError { status: int, url: str } — status in 400-499 range
+  | ServerError { status: int, url: str } — status in 500-599 range
+@implements [Error, Display, Debug]
+@related Response.raise_for_status
+
+---
+
+@type Headers
+@kind struct
+@purpose Case-insensitive HTTP header collection
+@fields
+  (internal) — key-value pairs with case-insensitive string keys
+@invariants
+  - Key lookup is case-insensitive ("Content-Type" == "content-type")
+  - Multiple values per key are allowed
+  - Iteration order matches response order
+@constructors Headers{} or Headers.from(dict[str, str])
+@methods get, get_all, contains, keys, values, len
+@implements [Iterable, Display, Debug]
+
+---
+
+@fn Headers.get
+@purpose Get the first value for a header name
+@sig (self, name: str) -> str?
+@params
+  name: Header name. Case-insensitive.
+@returns First value if header exists, None if not present
+@related Headers.get_all, Headers.contains
+
+---
+
+@workflow http_request_lifecycle
+@purpose Make an HTTP request, validate, process response, and clean up
+@steps
+  1. Configure: RequestOpts{} — set timeout, headers, auth, redirects
+  2. Execute: http.get(url, opts) or post/put/delete — send request
+  3. Validate: resp.raise_for_status() — ensure success status
+  4. Consume: resp.json[T]() or resp.text() or resp.bytes() — parse body
+  5. Cleanup: resp.close() — release connection (automatic if step 4 reads fully)
+@errors_at
+  step 2: HttpError | TimeoutError — network, DNS, TLS, or timeout failure
+  step 3: HttpStatusError — server returned 4xx or 5xx status
+  step 4: ParseError — body doesn't match expected format
+@antipatterns
+  - Don't read body twice. The stream is consumed on first read.
+  - Don't skip close(). It leaks a connection from the pool.
+  - Don't ignore raise_for_status(). A 404 is a successful HTTP response.
+  - Don't set verify_ssl=false in production. TLS errors indicate real problems.
+@variants
+  - streaming: Replace step 4 with resp.stream() -> Iterator[bytes] for large responses
+  - retry: Wrap steps 2-4 with exponential backoff for transient errors (5xx, TimeoutError)
+  - conditional: Use head() first to check Content-Length before downloading large responses
+@example
+  opts := RequestOpts{timeout: 10s, headers: {"Authorization": "Bearer " + token}}
+  resp := http.get("https://api.example.com/data", opts)?
+  resp.raise_for_status()?
+  data := resp.json[MyData]()?
+  // body auto-closed after full json read
+
+---
+
+@workflow authenticated_api_session
+@purpose Set up reusable auth headers and make multiple authenticated requests
+@steps
+  1. Create base opts: RequestOpts{headers: {"Authorization": "Bearer " + token}}
+  2. Make requests: http.get(url, opts)? — reuse opts across calls
+  3. Handle 401: Token expired — refresh token and retry
+  4. Handle 429: Rate limited — read Retry-After header, wait, retry
+@errors_at
+  step 2: HttpError | TimeoutError — network failures
+  step 3: AuthError — token refresh failed, user must re-authenticate
+  step 4: RateLimitError — still limited after retry
+@antipatterns
+  - Don't create new RequestOpts per request. Reuse the base opts.
+  - Don't ignore 429 responses. Hammering a rate-limited API gets you banned.
+  - Don't hardcode tokens. Read from environment or secure store.
+@example
+  token := env.get("API_TOKEN")?
+  opts := RequestOpts{headers: {"Authorization": "Bearer " + token}}
+  users := http.get("https://api.example.com/users", opts)?.json[[]User]()?
+  posts := http.get("https://api.example.com/posts", opts)?.json[[]Post]()?

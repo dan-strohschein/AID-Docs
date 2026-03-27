@@ -1,0 +1,24 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aid-bench"
+version = "0.1.0"
+description = "Benchmark harness for measuring AID documentation effectiveness"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+dependencies = ["anthropic>=0.40.0"]
+
+[project.scripts]
+aid-bench = "aid_bench.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/aid_bench"]
+
+[tool.rye]
+managed = true
+dev-dependencies = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

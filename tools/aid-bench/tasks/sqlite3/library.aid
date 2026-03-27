@@ -1,0 +1,221 @@
+@module sqlite3
+@lang python
+@version 3.10
+@stability stable
+@purpose DB-API 2.0 interface for SQLite databases. Lightweight, serverless, in-process SQL.
+@aid_version 0.1
+
+---
+
+@fn connect
+@purpose Open a connection to a SQLite database file or in-memory database
+@sig (database: str, timeout?: float, detect_types?: int, isolation_level?: str?, check_same_thread?: bool, factory?: type, cached_statements?: int, uri?: bool) -> Connection
+@params
+  database: Path to database file, or ":memory:" for in-RAM database. Required.
+  timeout: Seconds to wait for lock. Default 5.0. Must be > 0.
+  isolation_level: Transaction mode. One of: "deferred", "immediate", "exclusive", None. Default "deferred". None = autocommit.
+  check_same_thread: If true, only the creating thread can use the connection. Default true.
+@returns Connection object. Must be closed when done.
+@errors
+  OperationalError — cannot open database file (permissions, path doesn't exist)
+@post Connection is open. Caller must call close() or use as context manager.
+@effects [Fs]
+
+---
+
+@type Connection
+@kind class
+@purpose Database connection that manages transactions and cursors
+@implements [Closeable]
+@fields
+  isolation_level: str? — Current transaction isolation level
+  row_factory: type? — Factory for row objects. Default None (tuples). Set to sqlite3.Row for dict-like access.
+  total_changes: int — Total number of rows modified since connection opened
+@constructors None — produced by sqlite3.connect()
+@methods cursor, commit, rollback, close, execute, executemany, executescript
+@invariants
+  - Connection as context manager: commits on clean exit, rolls back on exception
+  - Context manager does NOT close the connection — only manages the transaction
+  - Closing without commit discards uncommitted changes
+@related Cursor, Row
+
+---
+
+@fn Connection.execute
+@purpose Execute a SQL statement and return a cursor (shortcut for cursor().execute())
+@sig (self, sql: str, parameters?: (any)) -> Cursor
+@params
+  sql: SQL statement. Use ? for parameter placeholders. Never use string formatting.
+  parameters: Tuple of values for ? placeholders. Default empty tuple.
+@returns Cursor with query results
+@errors
+  OperationalError — SQL syntax error or table/column doesn't exist
+  InterfaceError — connection is closed
+@pre Connection is open
+@post For DML (INSERT/UPDATE/DELETE): transaction is started if not already in one
+@related Connection.executemany, Connection.executescript, Cursor.execute
+
+---
+
+@fn Connection.executemany
+@purpose Execute a SQL statement against multiple parameter sets
+@sig (self, sql: str, seq_of_parameters: [any]) -> Cursor
+@params
+  sql: SQL statement with ? placeholders. Typically INSERT.
+  seq_of_parameters: List/iterable of parameter tuples. One execute per tuple.
+@returns Cursor (rowcount reflects total rows affected)
+@errors
+  OperationalError — SQL syntax error
+  ProgrammingError — parameter count mismatch
+
+---
+
+@fn Connection.commit
+@purpose Commit the current transaction, persisting all changes
+@sig (mut self) -> None
+@post All pending changes are written to disk. Transaction ends.
+
+---
+
+@fn Connection.rollback
+@purpose Roll back all changes since the last commit
+@sig (mut self) -> None
+@post All changes since last commit() are discarded. Transaction ends.
+
+---
+
+@fn Connection.close
+@purpose Close the database connection
+@sig (mut self) -> None
+@pre None (safe to call multiple times)
+@post Connection is closed. Any uncommitted changes are discarded (NOT committed).
+
+---
+
+@fn Connection.cursor
+@purpose Create a new Cursor object
+@sig (self) -> Cursor
+@returns New Cursor bound to this connection
+
+---
+
+@type Cursor
+@kind class
+@purpose Executes SQL statements and fetches results
+@fields
+  description: (str)? — Column names and types of last query. None if no query executed.
+  rowcount: int — Number of rows modified by last DML statement. -1 for SELECT.
+  lastrowid: int? — Row ID of last INSERT. None if no insert.
+@constructors None — produced by Connection.cursor() or Connection.execute()
+@methods execute, executemany, fetchone, fetchmany, fetchall
+@related Connection
+
+---
+
+@fn Cursor.execute
+@purpose Execute a single SQL statement
+@sig (self, sql: str, parameters?: (any)) -> Cursor
+@params
+  sql: SQL statement. Use ? for parameter placeholders. NEVER use f-strings or .format() — SQL injection risk.
+  parameters: Tuple of values for ? placeholders. Default empty tuple. For single param, use (value,) with trailing comma.
+@returns self (for chaining)
+@errors
+  OperationalError — SQL syntax error, table doesn't exist
+  ProgrammingError — wrong number of parameters for placeholders
+@related Cursor.executemany, Cursor.fetchall
+
+---
+
+@fn Cursor.executemany
+@purpose Execute a SQL statement against each parameter set in a sequence
+@sig (self, sql: str, seq_of_parameters: [any]) -> Cursor
+@params
+  sql: SQL with ? placeholders.
+  seq_of_parameters: Iterable of parameter tuples.
+@returns self
+
+---
+
+@fn Cursor.fetchone
+@purpose Fetch the next row of a query result
+@sig (self) -> (any)?
+@returns Next row as tuple, or None if no more rows
+
+---
+
+@fn Cursor.fetchmany
+@purpose Fetch multiple rows of a query result
+@sig (self, size?: int) -> [(any)]
+@params
+  size: Number of rows to fetch. Default cursor.arraysize (usually 1).
+@returns List of rows. Empty list if no more rows.
+
+---
+
+@fn Cursor.fetchall
+@purpose Fetch all remaining rows of a query result
+@sig (self) -> [(any)]
+@returns List of all remaining rows. Empty list if no results.
+
+---
+
+@type Row
+@kind class
+@purpose Dict-like row object with column name access
+@constructors None — produced when connection.row_factory = sqlite3.Row
+@invariants
+  - Supports both index access (row[0]) and name access (row["column"])
+  - Column name lookup is case-insensitive
+@related Connection.row_factory
+
+---
+
+@const PARSE_DECLTYPES
+@purpose Flag for detect_types: parse column types from declarations
+@type int
+@value 1
+
+---
+
+@const PARSE_COLNAMES
+@purpose Flag for detect_types: parse column types from query column names
+@type int
+@value 2
+
+---
+
+@workflow basic_query
+@purpose Create a database, insert data, and query results
+@steps
+  1. Connect: sqlite3.connect(":memory:") or sqlite3.connect("file.db") — open connection
+  2. Execute DDL: con.execute("CREATE TABLE ...") — create tables
+  3. Insert: con.execute("INSERT INTO t VALUES (?, ?)", (val1, val2)) — parameterized insert
+  4. Commit: con.commit() — persist changes
+  5. Query: cursor = con.execute("SELECT * FROM t") — run query
+  6. Fetch: rows = cursor.fetchall() — get results as list of tuples
+  7. Close: con.close() — release connection
+@errors_at
+  step 1: OperationalError — cannot open database
+  step 3: IntegrityError — constraint violation (unique, not null)
+  step 5: OperationalError — SQL error
+@antipatterns
+  - Don't use f-strings or .format() in SQL. Use ? placeholders. SQL injection risk.
+  - Don't forget to commit() after INSERT/UPDATE/DELETE. Changes are lost on close().
+  - Don't assume the with statement closes the connection. It only commits/rolls back.
+  - Don't use string concatenation for parameters: execute(f"... WHERE id={id}") is UNSAFE.
+
+---
+
+@workflow transaction_management
+@purpose Execute multiple operations atomically with commit/rollback
+@steps
+  1. Connect: con = sqlite3.connect(db)
+  2. Begin: Operations auto-start a transaction on first DML
+  3. Execute: con.execute("UPDATE ...") — multiple operations
+  4. Decide: If all succeeded, con.commit(). If any failed, con.rollback().
+  5. Close: con.close()
+@antipatterns
+  - Don't mix commit() and rollback() in the same transaction block.
+  - Don't forget that close() without commit() discards changes silently.
+@variants
+  - context_manager: Use `with con:` block — auto-commits on success, auto-rolls back on exception

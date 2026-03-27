@@ -1,0 +1,181 @@
+@module tarfile
+@lang python
+@version 3.10
+@stability stable
+@purpose Read and write tar archives with optional gzip/bz2/xz compression
+@aid_version 0.1
+
+---
+
+@fn open
+@purpose Open a tar archive for reading or writing
+@sig (name?: str, mode?: str, fileobj?: any, bufsize?: int) -> TarFile
+@params
+  name: Path to archive file. Optional if fileobj is provided.
+  mode: Open mode. Default "r". One of: r, r:*, r:, r:gz, r:bz2, r:xz, w, w:, w:gz, w:bz2, w:xz, a, a:.
+  fileobj: File-like object (e.g., BytesIO) to use instead of name. If both, fileobj is used.
+  bufsize: Block size. Default 10240.
+@returns TarFile object. Must be closed when done.
+@errors
+  ReadError — file cannot be opened or is not a tar archive
+  CompressionError — compression method not supported
+@post TarFile is open. Caller must close() or use as context manager.
+@effects [Fs]
+@related TarFile
+
+---
+
+@type TarFile
+@kind class
+@purpose Tar archive handle for reading, writing, and listing members
+@implements [Closeable]
+@methods add, addfile, getmembers, getnames, getmember, extractall, extract, extractfile, close
+@constructors None — produced by tarfile.open()
+@invariants
+  - Must be closed after use (use context manager or call close())
+  - Write operations only available in write modes (w, w:gz, etc.)
+  - Read operations only available in read modes (r, r:gz, etc.)
+
+---
+
+@fn TarFile.add
+@purpose Add a file or directory from the filesystem to the archive
+@sig (mut self, name: str, arcname?: str, recursive?: bool) -> None
+@params
+  name: Path on the filesystem. Required.
+  arcname: Name to use inside the archive. Default: same as name. Use this to rename files or place them in subdirectories within the archive.
+  recursive: If name is a directory, add contents recursively. Default true.
+@pre Archive opened in write mode
+@effects [Fs]
+@related TarFile.addfile
+
+---
+
+@fn TarFile.addfile
+@purpose Add a TarInfo object (and optional data) to the archive
+@sig (mut self, tarinfo: TarInfo, fileobj?: any) -> None
+@params
+  tarinfo: TarInfo describing the member to add. Must have name and size set.
+  fileobj: File-like object to read tarinfo.size bytes from. Required for regular files. Use BytesIO for in-memory data.
+@pre Archive opened in write mode. tarinfo.size must match fileobj length.
+@related TarFile.add, TarInfo
+
+---
+
+@fn TarFile.getmembers
+@purpose List all members of the archive
+@sig (self) -> [TarInfo]
+@returns List of TarInfo objects, one per archive member
+
+---
+
+@fn TarFile.getnames
+@purpose List all member names in the archive
+@sig (self) -> [str]
+@returns List of member names as strings
+
+---
+
+@fn TarFile.getmember
+@purpose Get a TarInfo object for a specific member by name
+@sig (self, name: str) -> TarInfo
+@errors
+  KeyError — no member with that name exists
+@related TarFile.getmembers
+
+---
+
+@fn TarFile.extractfile
+@purpose Extract a member as a readable file-like object (no disk write)
+@sig (self, member: str | TarInfo) -> any?
+@params
+  member: Member name or TarInfo object.
+@returns File-like object for reading the member content. Returns None for directories and non-file entries.
+@post Returned file object must be read and closed.
+@related TarFile.extract, TarFile.extractall
+
+---
+
+@fn TarFile.extractall
+@purpose Extract all members to a directory on disk
+@sig (mut self, path?: str, members?: [TarInfo]) -> None
+@params
+  path: Directory to extract into. Default ".".
+  members: Subset of members to extract. Default: all members.
+@effects [Fs]
+@pre SECURITY: Never extract untrusted archives without inspection. Malicious archives can use absolute paths or ../ to overwrite arbitrary files.
+
+---
+
+@fn TarFile.close
+@purpose Close the archive and flush any write buffers
+@sig (mut self) -> None
+
+---
+
+@type TarInfo
+@kind class
+@purpose Metadata about a single member in a tar archive
+@fields
+  name: str — Name/path of the member in the archive
+  size: int — File size in bytes. Must be set before addfile() for regular files.
+  type: int — Member type constant. REGTYPE for file, DIRTYPE for directory.
+@constructors TarInfo(name?: str)
+@methods isfile, isreg, isdir, issym
+@related TarFile, REGTYPE, DIRTYPE
+
+---
+
+@fn TarInfo.isfile
+@purpose Check if this member is a regular file
+@sig (self) -> bool
+
+---
+
+@fn TarInfo.isdir
+@purpose Check if this member is a directory
+@sig (self) -> bool
+
+---
+
+@const REGTYPE
+@purpose Type constant for regular files
+@type bytes
+@value b'0'
+
+---
+
+@const DIRTYPE
+@purpose Type constant for directories
+@type bytes
+@value b'5'
+
+---
+
+@workflow create_archive_in_memory
+@purpose Create a tar archive in memory using BytesIO
+@steps
+  1. Create buffer: buf = io.BytesIO()
+  2. Open archive: tar = tarfile.open(fileobj=buf, mode='w:gz')
+  3. Add files: For each file, create TarInfo + BytesIO with content, call tar.addfile(info, data)
+  4. Close: tar.close() — flushes to buffer
+  5. Read back: buf.seek(0), then tarfile.open(fileobj=buf, mode='r:gz')
+@antipatterns
+  - Don't forget to set tarinfo.size before addfile(). Size must match the data length exactly.
+  - Don't forget buf.seek(0) before reading the buffer back.
+  - Don't use tar.add() for in-memory data — it reads from the filesystem. Use tar.addfile() instead.
+
+---
+
+@workflow read_specific_member
+@purpose Read a single file from an archive without extracting to disk
+@steps
+  1. Open: tar = tarfile.open(name_or_fileobj, mode='r:*')
+  2. Get member: f = tar.extractfile('filename.txt')
+  3. Read: content = f.read()
+  4. Decode if text: text = content.decode('utf-8')
+  5. Close: tar.close()
+@antipatterns
+  - Don't use extractall() when you only need one file. It writes to disk.
+  - Don't forget that extractfile() returns bytes, not str. Decode if you need text.
+  - Don't forget that extractfile() returns None for directories.
