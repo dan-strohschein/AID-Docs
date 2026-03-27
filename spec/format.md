@@ -10,11 +10,15 @@
 2. [File structure](#2-file-structure)
 3. [Tier 1: Module header](#3-tier-1-module-header)
 4. [Tier 2: Entries](#4-tier-2-entries)
-5. [Tier 3: Workflows](#5-tier-3-workflows)
-6. [Syntax rules](#6-syntax-rules)
-7. [Parsing](#7-parsing)
-8. [Versioning](#8-versioning)
-9. [File organization](#9-file-organization)
+5. [Tier 2.5: Module annotations](#5-tier-25-module-annotations)
+6. [Tier 3: Workflows](#6-tier-3-workflows)
+7. [Syntax rules](#7-syntax-rules)
+8. [Parsing](#8-parsing)
+9. [Versioning](#9-versioning)
+10. [File organization](#10-file-organization)
+11. [Examples](#11-examples)
+12. [Security considerations](#12-security-considerations)
+13. [Migration](#13-migration)
 
 ---
 
@@ -424,7 +428,85 @@ Trait entries describe interfaces, protocols, or abstract contracts.
 
 ---
 
-## 5. Tier 3: Workflows
+## 5. Tier 2.5: Module annotations
+
+Module annotations are semantic blocks that apply to the module as a whole — not to any individual function, type, or workflow. They capture cross-cutting concerns: invariants that span multiple entries, architectural decisions, common mistakes, and free-form notes.
+
+Module annotations are separated by `---` like entries. They appear between entries and workflows in the file.
+
+### 5.1 Invariants block (`@invariants`)
+
+Module-level constraints that hold across the entire module:
+
+```
+@invariants
+  - BRIN indexes are lossy: results include false positives from matching page ranges.
+    Any query using a BRIN index MUST have a downstream FilterNode. [src: planner/nodes.go:1215-1238]
+  - Index selection priority: hash → btree → brin → full scan [src: planner/query_router.go:835-1083]
+  - ExecutionPlan is immutable after creation [src: planner/planner.go:111-112]
+```
+
+Each invariant is a bulleted line (prefixed with `- `) under `@invariants`. Source references (`[src:]`) are strongly recommended — they make the claim verifiable.
+
+### 5.2 Antipatterns block (`@antipatterns`)
+
+Module-level mistakes to avoid:
+
+```
+@antipatterns
+  - Returning BRINScanNode without FilterNode wrapping produces incorrect results.
+    [src: planner/query_router.go:1003-1022]
+  - Assuming BTreeOrderedScanNode eliminates the need for SortNode. B-tree keys use
+    ASCII encoding where "10" < "9". [src: planner/plan_builder.go:160-165]
+```
+
+### 5.3 Decision records (`@decision`)
+
+Architectural decision records explain WHY the code is structured a certain way. These prevent agents from "improving" code that was designed a specific way for a reason.
+
+```
+@decision index_selection_order
+@purpose Why BTree is checked before BRIN in the planner
+@context Both index types can serve range queries on the same field
+@chosen BTree first, BRIN as fallback when no BTree exists
+@rejected Cost-based selection between both; BRIN first (cheaper I/O)
+@rationale BTree gives exact results (no false positives) and avoids the FilterNode
+  overhead required by BRIN. For the common case where a BTree exists, this is always
+  faster. BRIN is only worth considering when no BTree covers the field.
+  [src: src/internal/query/planner/query_router.go:973-1022]
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `@decision` | Yes | Decision name (snake_case) |
+| `@purpose` | Yes | What question this answers |
+| `@context` | No | Constraints that existed when the decision was made |
+| `@chosen` | Yes | What was chosen |
+| `@rejected` | No | What was considered and rejected |
+| `@rationale` | Yes | Why, with `[src:]` references |
+
+### 5.4 Notes (`@note`)
+
+Free-form annotations for deprecation notices, migration notes, TODOs, and other module-level information:
+
+```
+@note adapter-deprecation
+@purpose ExpressionAdapter is a migration bridge — new code should use Expression AST directly
+  [src: syndrQL/expression_adapter.go:29-31]
+
+@note future-helpers
+@purpose Planned additions to expression_helpers.go: ExtractLIKEPattern, ExtractINList
+  [src: syndrQL/expression_helpers.go:214-216]
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `@note` | Yes | Note name (descriptive identifier) |
+| `@purpose` | Yes | What this note communicates |
+
+---
+
+## 6. Tier 3: Workflows
 
 Workflows describe how multiple entries work together to accomplish a task. This is the tier that has no equivalent in any existing documentation format.
 
@@ -501,7 +583,7 @@ Maps errors to specific workflow steps so the agent knows exactly where error ha
 
 ---
 
-## 6. Syntax rules
+## 7. Syntax rules
 
 ### 6.1 Field syntax
 
@@ -713,11 +795,11 @@ When a type implements `Closeable`, an agent knows to use the language-appropria
 
 ---
 
-## 7. Parsing
+## 8. Parsing
 
 An AID parser is a line-by-line state machine. No lookahead, no backtracking, no context-dependent rules. Each line is classified by its prefix, and the parser transitions between states accordingly.
 
-### 7.1 Line classification
+### 8.1 Line classification
 
 Every line in an AID file is exactly one of these types:
 
@@ -731,7 +813,7 @@ Every line in an AID file is exactly one of these types:
 
 No line can be ambiguous — the first character(s) determine its type.
 
-### 7.2 Parsing rules
+### 8.2 Parsing rules
 
 1. **Read line by line.** Trim trailing whitespace. Classify each line by its prefix.
 2. **Skip comments and blanks.** They carry no semantic content.
@@ -749,7 +831,7 @@ No line can be ambiguous — the first character(s) determine its type.
 6. **On end-of-file:**
    - Close the current entry. Parsing is complete.
 
-### 7.3 State machine
+### 8.3 State machine
 
 ```
 States: HEADER, ENTRY, FIELD_VALUE, DONE
@@ -769,7 +851,7 @@ States: HEADER, ENTRY, FIELD_VALUE, DONE
 | FIELD_VALUE | Comment/Blank | Skip | FIELD_VALUE |
 | Any | EOF | Finalize current entry/header | DONE |
 
-### 7.4 Output structure
+### 8.4 Output structure
 
 A parsed AID file produces:
 
@@ -801,7 +883,7 @@ AidFile {
 
 Entries are distinguished from workflows by their opening field: `@fn`, `@type`, `@trait`, `@const` produce entries; `@workflow` produces workflows.
 
-### 7.5 Error handling
+### 8.5 Error handling
 
 Parsers should be lenient:
 - **Unknown fields:** Ignore them. Forward compatibility requires this.
@@ -811,13 +893,13 @@ Parsers should be lenient:
 
 ---
 
-## 8. Versioning
+## 9. Versioning
 
-### 7.1 AID spec versioning
+### 9.1 AID spec versioning
 
 The AID format itself is versioned using semantic versioning. The `@aid_version` field in the module header declares which spec version the file conforms to.
 
-### 7.2 Library versioning
+### 9.2 Library versioning
 
 The `@version` field tracks which version of the documented library the AID file describes. When a library updates its API:
 
@@ -825,15 +907,15 @@ The `@version` field tracks which version of the documented library the AID file
 - Changed signatures: update the entry, add `@since` to note the change
 - Removed APIs: mark with `@deprecated` before removal, then remove in next major version
 
-### 7.3 Backwards compatibility
+### 9.3 Backwards compatibility
 
 New fields may be added to the AID spec in minor versions. Parsers must ignore unknown fields. Fields will not be removed or have their semantics changed except in major versions.
 
 ---
 
-## 9. File organization
+## 10. File organization
 
-### 9.1 Naming convention
+### 10.1 Naming convention
 
 ```
 module-name.aid
@@ -846,7 +928,7 @@ Examples:
 - `os-path.aid` for `os.path`
 - `std-collections.aid` for `std/collections`
 
-### 9.2 Directory structure
+### 10.2 Directory structure
 
 For a library with multiple modules:
 
@@ -860,6 +942,117 @@ For a library with multiple modules:
 
 AID files live in a `.aidocs/` directory at the project root, or in a central registry for third-party libraries.
 
-### 9.3 One file per module
+### 10.3 One file per module
 
 Each `.aid` file documents exactly one module. This keeps files at a manageable size (typically under 2,000 tokens) and allows agents to load only what they need.
+
+### 10.4 Manifest file
+
+Large projects (20+ packages) should include a `.aidocs/manifest.aid` file that indexes all AID files. The manifest lets agents identify relevant packages from a task description without opening every AID file.
+
+```
+@manifest
+@project SyndrDB
+@aid_version 0.1
+
+---
+
+@package query/planner
+@aid_file planner.aid
+@aid_status reviewed
+@depends [syndrQL, domain/index, domain/models]
+@purpose Query planning and optimization — converts parsed queries into execution plans
+@layer l2
+
+---
+
+@package domain/index/brinindex
+@aid_file brinindex.aid
+@aid_status draft
+@depends [domain/models]
+@purpose Block Range INdex — lossy page-range filtering for range queries
+@layer l2
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `@manifest` | Yes | Marker — identifies this as a manifest file |
+| `@project` | Yes | Project name |
+| `@package` | Yes | Full package path |
+| `@aid_file` | Yes | Filename in `.aidocs/` |
+| `@aid_status` | No | draft, reviewed, approved, stale |
+| `@depends` | No | Packages this one calls into |
+| `@purpose` | Yes | One-line description for relevance filtering |
+| `@layer` | No | `l1` or `l2` — tells agent what depth of info to expect |
+
+**Agent workflow:** Read manifest first. Identify relevant packages by matching the task description against `@purpose` fields. Load only those AID files plus their `@depends` chain. This prevents the token bloat seen in benchmarks when all AID files are loaded indiscriminately.
+
+### 10.5 Discovery protocol
+
+When an agent or tool needs to find AID files, it follows this discovery chain:
+
+1. Check for `.aidocs/` in the current working directory
+2. Walk up parent directories until `.aidocs/` is found or the filesystem root is reached
+3. If `.aidocs/manifest.aid` exists, use it for package-to-file mapping
+4. If no manifest exists, discover files by naming convention: `{package-name}.aid`
+5. For cross-project dependencies, check:
+   - `.aidocs/vendor/` — vendored AID from third-party dependencies
+   - `~/.aidocs/` — user-level central registry (configurable)
+
+The first `.aidocs/` directory found wins. Tools should not search multiple `.aidocs/` directories simultaneously — this keeps the resolution deterministic.
+
+---
+
+## 11. Examples
+
+### 11.1 Example blocks
+
+The `@example` field on entries contains minimal usage examples. Rules:
+
+- Examples use the language specified by the module's `@lang` field
+- Multi-line examples are indented continuation lines (standard AID syntax)
+- Examples should show the ONE thing the entry does — not a full program
+- Examples are patterns for an agent to follow, not executable tests
+
+```
+@example
+  resp := http.get("https://api.example.com/users")?
+  data := resp.json[[]User]()?
+```
+
+### 11.2 When to include examples
+
+Layer 1 extractors should only include examples from existing docstrings. Layer 2 generators may synthesize examples when the usage pattern is non-obvious — especially for workflows and entries with complex constraints.
+
+---
+
+## 12. Security considerations
+
+AID files are documentation artifacts. They carry the same trust level as the source code they describe.
+
+- **`[src:]` references are relative paths.** Tools must validate that resolved paths stay within the project root. A malicious AID file could reference `../../etc/passwd` — path traversal must be prevented.
+- **Generated AID should be reviewed before committing.** The same way generated code is reviewed. The L2 generator→reviewer pipeline provides automated review, but human review is appropriate for critical systems.
+- **Don't generate AID from untrusted source code without review.** If the source contains prompt injection patterns (in comments, docstrings, or string literals), the L2 generator could be influenced to produce misleading documentation.
+- **AID files should be committed to version control.** They are project artifacts, not ephemeral outputs. Committing them provides auditability and enables staleness detection via `@code_version`.
+
+---
+
+## 13. Migration
+
+### 13.1 Spec version compatibility
+
+The `@aid_version` field declares which AID spec version the file targets. Compatibility rules:
+
+- **Parsers must handle older spec versions gracefully.** Unknown fields are ignored (forward compatibility). Missing new fields use defaults.
+- **Minor version changes are additive only.** New fields may be added; existing fields retain their semantics. AID 0.1 files are valid AID 0.2 files.
+- **Breaking changes require a major version bump.** Field semantics may change or fields may be removed only in major versions (0.x → 1.0 allows breaking changes, since pre-1.0 is unstable).
+
+### 13.2 Updating AID files
+
+When the spec changes, existing AID files are updated by re-running the generation pipeline:
+
+1. Layer 1: re-run the extractor — captures any new fields the extractor now produces
+2. Layer 2: re-run the generator and reviewer — applies new semantic field requirements
+3. Manual edits: only needed if field semantics changed (major version)
+
+The `aid-gen-l2 stale` command detects files that need re-generation by comparing `@code_version` against the current git HEAD.

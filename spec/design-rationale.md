@@ -315,3 +315,31 @@ Three reasons, validated by benchmarks:
 2. **Source-linking enables parallelism.** The reviewer only reads files referenced in `[src:]` links, not the entire codebase. Multiple reviewers can verify different AID files in parallel.
 
 3. **Incremental updates.** When code changes, only claims with stale `[src:]` references need re-verification. The pipeline doesn't regenerate everything — it surgically updates the changed claims and re-verifies only those.
+
+## 28. Why module-level annotations (invariants, antipatterns, decisions)?
+
+Benchmark BM3 proved that the most valuable L2 output was module-level invariants and antipatterns — not per-entry descriptions. The statement "BRIN is lossy — always wrap in FilterNode" applies to the entire planner module, not to any single function. Without a spec-level home, L2 generators invented ad-hoc block types (global `@invariants`, `@decision`) that the parser couldn't handle.
+
+Module annotations are a new tier because they represent a fundamentally different kind of knowledge: **cross-cutting concerns** that span multiple entries. An invariant like "ExecutionPlan is immutable after creation" constrains every function that touches ExecutionPlan, not just the constructor. Putting it on one entry would hide it from agents reading other entries.
+
+Decision records (`@decision`) are specifically designed to prevent a failure mode we observed: agents "improving" code that was intentionally designed a certain way. When the agent reads `@chosen BTree first, BRIN fallback` with a rationale, it won't waste tokens proposing a cost-based selection that was already considered and rejected.
+
+## 29. Why a manifest file?
+
+Benchmark BM2 showed that loading all 69 AID files for a 219K LoC codebase increased tokens by 24% — most files were irrelevant. The `@depends` field helps with selective loading, but it requires reading the header of every file to find the dependency chain.
+
+A manifest solves this with a single file read. The agent reads `.aidocs/manifest.aid`, scans the `@purpose` fields to identify relevant packages, follows the `@depends` chain, and loads only those AID files. For the BRIN integration task, this would have reduced the loaded AID from 69 files to 5.
+
+The `@layer` field (l1 or l2) tells the agent what quality of documentation to expect. L2 files with workflows and invariants are worth reading carefully; L1 files with only type signatures are useful for API reference but won't provide architectural insight.
+
+## 30. Why a formal discovery protocol?
+
+Without a standard discovery chain, every tool and agent integration must hardcode assumptions about where AID files live. The discovery protocol (`.aidocs/` in current directory → walk up → check manifest → fallback to naming convention) is modeled after how `.git/`, `.github/`, and `.vscode/` directories are discovered.
+
+The vendor directory (`.aidocs/vendor/`) handles the common case where a project depends on third-party libraries that have their own AID files. Rather than requiring a central registry, vendoring keeps AID files alongside the code they describe — the same philosophy as Go modules and npm.
+
+## 31. Why security considerations in the spec?
+
+`[src:]` references are paths that tools resolve and read. A malicious AID file could reference `../../.env` or `/etc/passwd`, causing a reviewer agent to read sensitive files and potentially expose them in its output. Path traversal prevention must be explicitly called out because the natural assumption — "it's just documentation" — understates the risk.
+
+This is especially important because AID files can be AI-generated. If the L2 generator processes source code containing prompt injection (crafted comments or string literals), it could produce AID files with misleading claims or malicious source references. The spec must establish that AID files are trusted artifacts, not untrusted input.

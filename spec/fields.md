@@ -205,6 +205,55 @@ Bounds appear in two places:
 
 ---
 
+## Module annotation fields
+
+### Invariants block
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `@invariants` | — | block | Module-level constraints. Each line prefixed with `- `. Include `[src:]` references. |
+
+### Antipatterns block
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `@antipatterns` | — | block | Module-level mistakes to avoid. Each line prefixed with `- `. Include `[src:]` references. |
+
+### Decision record (`@decision`)
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `@decision` | Yes | string | Decision name (snake_case) |
+| `@purpose` | Yes | string | What question this decision answers |
+| `@context` | No | string/block | Constraints that existed when the decision was made |
+| `@chosen` | Yes | string | What was chosen |
+| `@rejected` | No | string/block | What was considered and rejected |
+| `@rationale` | Yes | string/block | Why, with `[src:]` references |
+
+### Note (`@note`)
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `@note` | Yes | string | Note name (descriptive identifier) |
+| `@purpose` | Yes | string | What this note communicates |
+
+---
+
+## Manifest fields (`manifest.aid`)
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `@manifest` | Yes | — | Marker identifying this as a manifest file |
+| `@project` | Yes | string | Project name |
+| `@package` | Yes | string | Full package path (one per entry in manifest) |
+| `@aid_file` | Yes | string | Filename in `.aidocs/` |
+| `@aid_status` | No | enum | `draft`, `reviewed`, `approved`, `stale` |
+| `@depends` | No | list | Packages this one calls into |
+| `@purpose` | Yes | string | One-line description for relevance filtering |
+| `@layer` | No | enum | `l1` or `l2` — documentation depth available |
+
+---
+
 ## Universal type notation
 
 These type names are used in signatures regardless of source language. Tooling uses `@lang` to map to language-specific types.
