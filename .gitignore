@@ -9,3 +9,8 @@ build/
 # results/ — benchmark results are committed (they're documentation)
 requirements.lock
 requirements-dev.lock
+solution.py
+aid-gen-go
+aid-parse
+aid-validate
+aid-gen-l2
