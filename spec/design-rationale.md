@@ -283,3 +283,35 @@ An agent generating cross-platform code needs to know:
 `@platform` provides this as structured data rather than burying it in prose descriptions. Each line names a platform and describes only the divergent behavior, keeping the common-case documentation clean.
 
 Platform differences are particularly dangerous because they produce code that works on the developer's machine but fails in production (or vice versa). An agent that knows `@platform windows: Max path 260 chars` can proactively add path length validation that a platform-unaware agent would miss.
+
+## 24. Why source-linked claims in Layer 2?
+
+Layer 2 adds semantic information that Layer 1 can't extract mechanically: invariants, constraints, antipatterns, workflows. The risk: an AI generating these could hallucinate constraints that don't exist. Source references (`[src: file:line]`) solve this by making every claim **verifiable**.
+
+A claim like "BRIN is lossy, always filter results" is an assertion. `[src: planner/nodes.go:245-280]` turns it into a checkable fact — a reviewer agent reads those lines and confirms or denies. This is the key insight: **we don't need to trust the generator. We need to make its claims verifiable.**
+
+The generator-reviewer split is intentional. One agent infers semantics (creative, exploratory). A separate agent verifies claims against source (critical, focused). They run in separate contexts so the reviewer can't be influenced by the generator's reasoning. This is the same principle as code review — the reviewer catches what the author misses.
+
+## 25. Why `@code_version` and `@aid_status`?
+
+AID files are living documents. When code changes, the AID must either be confirmed still-valid or updated. Without version tracking, stale AID is worse than no AID — it gives the agent false confidence in claims that are no longer true.
+
+`@code_version git:HASH` pins the AID to a specific code state. Staleness detection becomes mechanical: if the hash doesn't match HEAD, check whether the `[src:]` references point to changed lines. If they do, the specific claims are stale. If they don't, the AID is still valid — just update the hash.
+
+The status lifecycle (`draft → reviewed → approved → stale`) gives both agents and humans visibility into how trustworthy each AID file is. An agent can weight its confidence accordingly: `reviewed` AID is more reliable than `draft`, and `stale` AID should be treated with caution.
+
+## 26. Why `@depends` for selective loading?
+
+Benchmark BM2 showed that loading all 69 AID files for a 219K LoC codebase actually increased token usage by 24%. Most AID files were irrelevant to the task. `@depends` tells the agent which packages a module interacts with, so it can load only the relevant AID files.
+
+For a task on the query planner, `@depends [syndrQL, domain/index, domain/models, storage/buffer]` reduces the AID set from 69 files to 5. This restores the token efficiency advantage seen in BM1 while keeping the architectural awareness advantage.
+
+## 27. Why a multi-agent pipeline instead of a single generator?
+
+Three reasons, validated by benchmarks:
+
+1. **Hallucination detection.** A single agent generating and self-verifying has a confirmation bias — it tends to justify its own claims. A separate reviewer with a fresh context evaluates claims independently.
+
+2. **Source-linking enables parallelism.** The reviewer only reads files referenced in `[src:]` links, not the entire codebase. Multiple reviewers can verify different AID files in parallel.
+
+3. **Incremental updates.** When code changes, only claims with stale `[src:]` references need re-verification. The pipeline doesn't regenerate everything — it surgically updates the changed claims and re-verifies only those.

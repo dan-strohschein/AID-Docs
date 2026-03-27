@@ -84,7 +84,8 @@ AID/
 │   ├── format.md              # The AID format specification
 │   ├── fields.md              # Complete field reference
 │   ├── design-rationale.md    # Why every design decision was made
-│   └── generation.md          # How AID files are generated from source code
+│   ├── generation.md          # How AID files are generated from source code
+│   └── layer2.md              # Layer 2: AI-generated semantic docs with verification
 └── examples/
     ├── http-client.aid        # HTTP client module example
     ├── collections-hashmap.aid # Generic collections example

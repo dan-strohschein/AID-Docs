@@ -89,7 +89,12 @@ The module header identifies the module and provides top-level metadata.
 | `@stability` | No | One of: `experimental`, `unstable`, `stable`, `deprecated`. Default: `stable` |
 | `@purpose` | Yes | One-line description of what the module does. Max 120 characters. |
 | `@deps` | No | Comma-separated list of modules this module depends on |
+| `@depends` | No | Packages this module calls into (for selective AID loading) |
 | `@source` | No | URL to source repository or documentation |
+| `@code_version` | No | Git commit hash or tag identifying the code version this AID describes. Format: `git:HASH` |
+| `@aid_status` | No | Document lifecycle status: `draft`, `reviewed`, `approved`, `stale`. Default: `draft` |
+| `@aid_generated_by` | No | Agent role that produced this AID (e.g., `layer1-extractor`, `layer2-generator`) |
+| `@aid_reviewed_by` | No | Agent role that verified this AID (e.g., `layer2-reviewer`) |
 | `@aid_version` | No | Version of the AID spec this file conforms to. Default: latest |
 
 ### 3.2 Example
@@ -541,7 +546,27 @@ Within field values, `—` (em dash) separates a name from its description:
   status: int — HTTP status code. Range [100, 599].
 ```
 
-### 6.5 Lists
+### 6.5 Source references
+
+Layer 2 (AI-generated) semantic claims must be linked to the source code that supports them using `[src:]` references:
+
+```
+@invariants
+  - BRIN is a lossy index. Results must be filtered. [src: planner/nodes.go:245-280]
+  - Indexes are checked in order: hash, btree, brin, full scan. [src: planner/query_router.go:950-1080]
+
+@antipatterns
+  - Don't return BRINScanNode without FilterNode. [src: planner/nodes.go:250]
+```
+
+Source reference syntax:
+- `[src: file:LINE]` — single line
+- `[src: file:START-END]` — line range
+- `[src: file:LINE, other_file:LINE]` — multiple locations
+
+Paths are relative to the project root. Line numbers reference the code version in `@code_version`. Source references enable **mechanical verification** — a reviewer agent reads the referenced code and confirms the claim.
+
+### 6.6 Lists
 
 Lists within fields use comma-separated values in brackets:
 
@@ -551,7 +576,7 @@ Lists within fields use comma-separated values in brackets:
 @implements [Display, Debug, Clone]
 ```
 
-### 6.6 Cross-module references
+### 6.7 Cross-module references
 
 Any field that references another entry (`@related`, `@deps`, `@implements`, `@extends`, `@implementors`, `@constructors`) supports both bare and qualified names.
 
@@ -582,7 +607,7 @@ Qualified names are only required for cross-module references. Bare names always
 @related get, post, http/types.Headers
 ```
 
-### 6.7 Sub-fields
+### 6.8 Sub-fields
 
 Nested properties within parameters use `.` prefix with additional indentation:
 
@@ -593,7 +618,7 @@ Nested properties within parameters use `.` prefix with additional indentation:
     .redirects: int. Default 5. Range [0, 20].
 ```
 
-### 6.8 Type notation
+### 6.9 Type notation
 
 AID uses a universal type notation that maps to any source language:
 
@@ -616,7 +641,7 @@ AID uses a universal type notation that maps to any source language:
 
 These are AID-universal types. The `@lang` field in the header tells tooling how to map them to language-specific types.
 
-### 6.9 Inheritance (`@extends`)
+### 6.10 Inheritance (`@extends`)
 
 Types that inherit from a parent class use `@extends` to declare the relationship:
 
@@ -636,7 +661,7 @@ For multiple inheritance (Python, C++):
 
 For languages without class inheritance (Go, Rust), `@extends` is not used. Use `@implements` for interface/trait satisfaction and composition for embedding.
 
-### 6.10 Platform-specific behavior (`@platform`)
+### 6.11 Platform-specific behavior (`@platform`)
 
 When a function or type behaves differently across operating systems or platforms, use `@platform` to document the differences:
 
@@ -660,7 +685,7 @@ If a function is only available on certain platforms:
   macos: Available.
 ```
 
-### 6.11 Well-known protocols
+### 6.12 Well-known protocols
 
 The `@implements` field accepts both language-specific names and AID-universal protocol names. Universal protocol names describe behavioral contracts that exist across languages under different names:
 
