@@ -984,6 +984,7 @@ Large projects (20+ packages) should include a `.aidocs/manifest.aid` file that 
 | `@depends` | No | Packages this one calls into |
 | `@purpose` | Yes | One-line description for relevance filtering |
 | `@layer` | No | `l1` or `l2` — tells agent what depth of info to expect |
+| `@key_risks` | No | 1-2 most critical things to know about this package, in a few words. Enables quick context without loading the full AID file. |
 
 **Agent workflow:** Read manifest first. Identify relevant packages by matching the task description against `@purpose` fields. Load only those AID files plus their `@depends` chain. This prevents the token bloat seen in benchmarks when all AID files are loaded indiscriminately.
 

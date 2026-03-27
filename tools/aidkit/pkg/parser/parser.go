@@ -31,10 +31,12 @@ var entryKinds = map[string]string{
 
 // Annotation-starting field names (module-level Tier 2.5 blocks)
 var annotationKinds = map[string]bool{
-	"invariants":  true,
+	"invariants":   true,
+	"invariant":    true, // Accept singular form too
 	"antipatterns": true,
-	"decision":    true,
-	"note":        true,
+	"antipattern":  true, // Accept singular form too
+	"decision":     true,
+	"note":         true,
 }
 
 // Manifest marker
