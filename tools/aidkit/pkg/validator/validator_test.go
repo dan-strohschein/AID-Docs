@@ -256,16 +256,101 @@ func TestCodeVersionInvalid(t *testing.T) {
 }
 
 func TestValidateExampleFile(t *testing.T) {
-	// Parse one of our real example files
 	f, _, err := parser.ParseFile("../../../../examples/http-client.aid")
 	if err != nil {
 		t.Skip("example file not found")
 	}
 	issues := Validate(f)
-	// Should have no errors (warnings are OK)
 	for _, i := range issues {
 		if i.Severity == SeverityError {
 			t.Errorf("error in example file: %s", i)
 		}
+	}
+}
+
+func TestDecisionFieldsComplete(t *testing.T) {
+	f, _, _ := parser.ParseString(`@module test
+@lang go
+@version 1.0.0
+@aid_version 0.1
+
+---
+
+@decision my_choice
+@purpose Why we chose X
+@chosen X
+@rejected Y
+@rationale X is faster
+`)
+	issues := Validate(f)
+	for _, i := range issues {
+		if i.Rule == "decision-fields" {
+			t.Errorf("unexpected decision-fields issue: %s", i)
+		}
+	}
+}
+
+func TestDecisionFieldsMissingChosen(t *testing.T) {
+	f, _, _ := parser.ParseString(`@module test
+@lang go
+@version 1.0.0
+@aid_version 0.1
+
+---
+
+@decision my_choice
+@purpose Why we chose X
+@rationale X is faster
+`)
+	issues := Validate(f)
+	found := false
+	for _, i := range issues {
+		if i.Rule == "decision-fields" && i.Entry == "decision:my_choice" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected decision-fields warning for missing @chosen")
+	}
+}
+
+func TestManifestFieldsComplete(t *testing.T) {
+	f, _, _ := parser.ParseString(`@manifest
+@project Test
+@aid_version 0.1
+
+---
+
+@package query/planner
+@aid_file planner.aid
+@purpose Query planning
+`)
+	issues := Validate(f)
+	for _, i := range issues {
+		if i.Rule == "manifest-fields" && i.Severity == SeverityError {
+			t.Errorf("unexpected manifest-fields error: %s", i)
+		}
+	}
+}
+
+func TestManifestFieldsMissingAidFile(t *testing.T) {
+	f, _, _ := parser.ParseString(`@manifest
+@project Test
+@aid_version 0.1
+
+---
+
+@package query/planner
+@purpose Query planning
+`)
+	issues := Validate(f)
+	found := false
+	for _, i := range issues {
+		if i.Rule == "manifest-fields" && i.Severity == SeverityError {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected manifest-fields error for missing @aid_file")
 	}
 }

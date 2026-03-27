@@ -20,7 +20,7 @@ const (
 	stateDone
 )
 
-// Entry-starting field names
+// Entry-starting field names — these start new blocks when seen in stateEntry
 var entryKinds = map[string]string{
 	"fn":       "fn",
 	"type":     "type",
@@ -28,6 +28,17 @@ var entryKinds = map[string]string{
 	"const":   "const",
 	"workflow": "workflow",
 }
+
+// Annotation-starting field names (module-level Tier 2.5 blocks)
+var annotationKinds = map[string]bool{
+	"invariants":  true,
+	"antipatterns": true,
+	"decision":    true,
+	"note":        true,
+}
+
+// Manifest marker
+const manifestField = "manifest"
 
 // Source reference pattern: [src: file:LINE] or [src: file:START-END]
 var srcRefPattern = regexp.MustCompile(`\[src:\s*([^\]]+)\]`)
@@ -63,10 +74,11 @@ func Parse(r io.Reader) (*AidFile, []Warning, error) {
 
 	var currentEntry *Entry
 	var currentWorkflow *Workflow
+	var currentAnnotation *Annotation
 	var currentFieldName string
 	lineNum := 0
 
-	finishEntry := func() {
+	finishBlock := func() {
 		if currentEntry != nil {
 			result.Entries = append(result.Entries, *currentEntry)
 			currentEntry = nil
@@ -74,6 +86,10 @@ func Parse(r io.Reader) (*AidFile, []Warning, error) {
 		if currentWorkflow != nil {
 			result.Workflows = append(result.Workflows, *currentWorkflow)
 			currentWorkflow = nil
+		}
+		if currentAnnotation != nil {
+			result.Annotations = append(result.Annotations, *currentAnnotation)
+			currentAnnotation = nil
 		}
 		currentFieldName = ""
 	}
@@ -87,6 +103,9 @@ func Parse(r io.Reader) (*AidFile, []Warning, error) {
 		case stateHeader:
 			switch lineType {
 			case LineField:
+				if fieldName == manifestField {
+					result.IsManifest = true
+				}
 				setHeaderField(&result.Header, fieldName, value)
 				currentFieldName = fieldName
 
@@ -110,7 +129,29 @@ func Parse(r io.Reader) (*AidFile, []Warning, error) {
 			switch lineType {
 			case LineField:
 				kind, isEntry := entryKinds[fieldName]
-				if isEntry {
+				isAnnotation := annotationKinds[fieldName]
+
+				// Manifest entries use @package as the entry-starting field
+				if result.IsManifest && fieldName == "package" {
+					currentEntry = &Entry{
+						Kind:   "package",
+						Name:   value,
+						Fields: make(map[string]Field),
+					}
+					currentFieldName = fieldName
+					state = stateFieldValue
+				} else if isAnnotation {
+					// Module-level annotation block
+					currentAnnotation = &Annotation{
+						Kind:   fieldName,
+						Name:   value,
+						Fields: make(map[string]Field),
+					}
+					// For invariants/antipatterns, the content is continuation lines
+					// For decision/note, the name is the value
+					currentFieldName = fieldName
+					state = stateFieldValue
+				} else if isEntry {
 					if kind == "workflow" {
 						currentWorkflow = &Workflow{
 							Name:   value,
@@ -163,15 +204,17 @@ func Parse(r io.Reader) (*AidFile, []Warning, error) {
 					currentEntry.Fields[fieldName] = field
 				} else if currentWorkflow != nil {
 					currentWorkflow.Fields[fieldName] = field
+				} else if currentAnnotation != nil {
+					currentAnnotation.Fields[fieldName] = field
 				}
 
 			case LineContinuation:
 				if currentFieldName != "" {
-					appendEntryField(currentEntry, currentWorkflow, currentFieldName, value)
+					appendBlockField(currentEntry, currentWorkflow, currentAnnotation, currentFieldName, value)
 				}
 
 			case LineSeparator:
-				finishEntry()
+				finishBlock()
 				state = stateEntry
 
 			case LineComment, LineBlank:
@@ -185,7 +228,7 @@ func Parse(r io.Reader) (*AidFile, []Warning, error) {
 	}
 
 	// Finalize any open entry
-	finishEntry()
+	finishBlock()
 
 	return result, warnings, nil
 }
@@ -234,12 +277,14 @@ func appendHeaderField(h *Header, name, value string) {
 	}
 }
 
-func appendEntryField(entry *Entry, workflow *Workflow, fieldName, value string) {
+func appendBlockField(entry *Entry, workflow *Workflow, annotation *Annotation, fieldName, value string) {
 	var fields map[string]Field
 	if entry != nil {
 		fields = entry.Fields
 	} else if workflow != nil {
 		fields = workflow.Fields
+	} else if annotation != nil {
+		fields = annotation.Fields
 	}
 	if fields == nil {
 		return

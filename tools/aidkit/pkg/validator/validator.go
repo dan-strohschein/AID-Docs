@@ -75,6 +75,8 @@ func AllRules() []Rule {
 		&RequiredFieldsRule{},
 		&MethodBindingRule{},
 		&CrossReferencesRule{},
+		&DecisionFieldsRule{},
+		&ManifestFieldsRule{},
 		&SourceRefFormatRule{},
 		&StatusValidRule{},
 		&CodeVersionFormatRule{},
@@ -370,4 +372,67 @@ func (r *CodeVersionFormatRule) Check(file *parser.AidFile) []Issue {
 		}}
 	}
 	return nil
+}
+
+// DecisionFieldsRule checks @decision blocks have required fields.
+type DecisionFieldsRule struct{}
+
+func (r *DecisionFieldsRule) Name() string { return "decision-fields" }
+func (r *DecisionFieldsRule) Check(file *parser.AidFile) []Issue {
+	var issues []Issue
+	for _, a := range file.Annotations {
+		if a.Kind != "decision" {
+			continue
+		}
+		name := "decision:" + a.Name
+		if _, has := a.Fields["purpose"]; !has {
+			issues = append(issues, Issue{
+				Rule: r.Name(), Severity: SeverityWarning,
+				Entry: name, Message: "@purpose is required for @decision blocks",
+			})
+		}
+		if _, has := a.Fields["chosen"]; !has {
+			issues = append(issues, Issue{
+				Rule: r.Name(), Severity: SeverityWarning,
+				Entry: name, Message: "@chosen is required for @decision blocks",
+			})
+		}
+		if _, has := a.Fields["rationale"]; !has {
+			issues = append(issues, Issue{
+				Rule: r.Name(), Severity: SeverityWarning,
+				Entry: name, Message: "@rationale is required for @decision blocks",
+			})
+		}
+	}
+	return issues
+}
+
+// ManifestFieldsRule checks manifest entries have required fields.
+type ManifestFieldsRule struct{}
+
+func (r *ManifestFieldsRule) Name() string { return "manifest-fields" }
+func (r *ManifestFieldsRule) Check(file *parser.AidFile) []Issue {
+	if !file.IsManifest {
+		return nil
+	}
+	var issues []Issue
+	for _, e := range file.Entries {
+		if e.Kind != "package" {
+			continue
+		}
+		name := "package:" + e.Name
+		if _, has := e.Fields["aid_file"]; !has {
+			issues = append(issues, Issue{
+				Rule: r.Name(), Severity: SeverityError,
+				Entry: name, Message: "@aid_file is required in manifest entries",
+			})
+		}
+		if _, has := e.Fields["purpose"]; !has {
+			issues = append(issues, Issue{
+				Rule: r.Name(), Severity: SeverityWarning,
+				Entry: name, Message: "@purpose is recommended in manifest entries",
+			})
+		}
+	}
+	return issues
 }

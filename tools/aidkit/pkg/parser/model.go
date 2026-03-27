@@ -5,10 +5,19 @@ import "fmt"
 
 // AidFile is the parsed representation of a complete .aid document.
 type AidFile struct {
-	Header    Header
-	Entries   []Entry
-	Workflows []Workflow
-	Comments  []string // Top-level comments (provenance markers, etc.)
+	Header      Header
+	Entries     []Entry
+	Annotations []Annotation // Module-level annotations (invariants, antipatterns, decisions, notes)
+	Workflows   []Workflow
+	Comments    []string // Top-level comments (provenance markers, etc.)
+	IsManifest  bool     // True if this is a manifest.aid file
+}
+
+// Annotation represents a module-level annotation block (Tier 2.5).
+type Annotation struct {
+	Kind   string           // "invariants", "antipatterns", "decision", "note"
+	Name   string           // For decision/note: the identifier. Empty for invariants/antipatterns.
+	Fields map[string]Field // All fields on this annotation
 }
 
 // Header contains module-level metadata from the first section.

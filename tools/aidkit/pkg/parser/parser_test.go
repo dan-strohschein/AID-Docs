@@ -424,3 +424,201 @@ func TestExtractSourceRefs(t *testing.T) {
 		}
 	}
 }
+
+func TestParseInvariantsAnnotation(t *testing.T) {
+	input := `@module test/mod
+@lang go
+@version 1.0.0
+@aid_version 0.1
+
+---
+
+@fn Get
+@purpose Get a value
+@sig (key: str) -> str
+
+---
+
+@invariants
+  - BRIN is lossy [src: nodes.go:245]
+  - Plan is immutable after creation [src: planner.go:111]
+`
+	f, warns, err := ParseString(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range warns {
+		t.Logf("warning: %s", w)
+	}
+	if len(f.Annotations) != 1 {
+		t.Fatalf("annotations = %d, want 1", len(f.Annotations))
+	}
+	a := f.Annotations[0]
+	if a.Kind != "invariants" {
+		t.Errorf("kind = %q, want invariants", a.Kind)
+	}
+	// Check source refs were extracted from continuation lines
+	inv := a.Fields["invariants"]
+	if len(inv.SourceRefs) != 2 {
+		t.Errorf("source refs = %d, want 2", len(inv.SourceRefs))
+	}
+}
+
+func TestParseDecisionAnnotation(t *testing.T) {
+	input := `@module test/mod
+@lang go
+@version 1.0.0
+@aid_version 0.1
+
+---
+
+@decision index_selection_order
+@purpose Why BTree is checked before BRIN
+@chosen BTree first, BRIN fallback
+@rejected Cost-based selection
+@rationale BTree gives exact results
+  [src: query_router.go:973-1022]
+`
+	f, _, err := ParseString(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Annotations) != 1 {
+		t.Fatalf("annotations = %d, want 1", len(f.Annotations))
+	}
+	d := f.Annotations[0]
+	if d.Kind != "decision" {
+		t.Errorf("kind = %q", d.Kind)
+	}
+	if d.Name != "index_selection_order" {
+		t.Errorf("name = %q", d.Name)
+	}
+	if d.Fields["chosen"].InlineValue != "BTree first, BRIN fallback" {
+		t.Errorf("chosen = %q", d.Fields["chosen"].InlineValue)
+	}
+	if d.Fields["rejected"].InlineValue != "Cost-based selection" {
+		t.Errorf("rejected = %q", d.Fields["rejected"].InlineValue)
+	}
+}
+
+func TestParseNoteAnnotation(t *testing.T) {
+	input := `@module test/mod
+@lang go
+@version 1.0.0
+@aid_version 0.1
+
+---
+
+@note adapter-deprecation
+@purpose ExpressionAdapter is a migration bridge
+`
+	f, _, err := ParseString(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Annotations) != 1 {
+		t.Fatalf("annotations = %d, want 1", len(f.Annotations))
+	}
+	n := f.Annotations[0]
+	if n.Kind != "note" || n.Name != "adapter-deprecation" {
+		t.Errorf("note = %q %q", n.Kind, n.Name)
+	}
+}
+
+func TestParseManifest(t *testing.T) {
+	input := `@manifest
+@project SyndrDB
+@aid_version 0.1
+
+---
+
+@package query/planner
+@aid_file planner.aid
+@aid_status reviewed
+@depends [syndrQL, domain/index]
+@purpose Query planning and optimization
+@layer l2
+
+---
+
+@package domain/index/brinindex
+@aid_file brinindex.aid
+@purpose BRIN index implementation
+@layer l1
+`
+	f, _, err := ParseString(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !f.IsManifest {
+		t.Error("expected IsManifest = true")
+	}
+	if len(f.Entries) != 2 {
+		t.Fatalf("entries = %d, want 2", len(f.Entries))
+	}
+	e0 := f.Entries[0]
+	if e0.Kind != "package" || e0.Name != "query/planner" {
+		t.Errorf("entry 0 = %q %q", e0.Kind, e0.Name)
+	}
+	if e0.Fields["aid_file"].InlineValue != "planner.aid" {
+		t.Errorf("aid_file = %q", e0.Fields["aid_file"].InlineValue)
+	}
+	if e0.Fields["layer"].InlineValue != "l2" {
+		t.Errorf("layer = %q", e0.Fields["layer"].InlineValue)
+	}
+	e1 := f.Entries[1]
+	if e1.Kind != "package" || e1.Name != "domain/index/brinindex" {
+		t.Errorf("entry 1 = %q %q", e1.Kind, e1.Name)
+	}
+}
+
+func TestParseMultipleAnnotations(t *testing.T) {
+	input := `@module test/mod
+@lang go
+@version 1.0.0
+@aid_version 0.1
+
+---
+
+@fn Get
+@purpose Get a value
+@sig () -> str
+
+---
+
+@invariants
+  - Always lock before read
+
+---
+
+@antipatterns
+  - Don't call Get without init
+
+---
+
+@workflow basic_usage
+@purpose Use the module
+@steps
+  1. Init
+  2. Get
+`
+	f, _, err := ParseString(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(f.Entries) != 1 {
+		t.Errorf("entries = %d, want 1", len(f.Entries))
+	}
+	if len(f.Annotations) != 2 {
+		t.Errorf("annotations = %d, want 2", len(f.Annotations))
+	}
+	if len(f.Workflows) != 1 {
+		t.Errorf("workflows = %d, want 1", len(f.Workflows))
+	}
+	if f.Annotations[0].Kind != "invariants" {
+		t.Errorf("annotation 0 kind = %q", f.Annotations[0].Kind)
+	}
+	if f.Annotations[1].Kind != "antipatterns" {
+		t.Errorf("annotation 1 kind = %q", f.Annotations[1].Kind)
+	}
+}
