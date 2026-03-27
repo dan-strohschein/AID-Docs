@@ -90,6 +90,10 @@ type HeaderCompleteRule struct{}
 
 func (r *HeaderCompleteRule) Name() string { return "header-complete" }
 func (r *HeaderCompleteRule) Check(file *parser.AidFile) []Issue {
+	// Manifest files use @manifest + @project instead of @module + @lang
+	if file.IsManifest {
+		return nil
+	}
 	var issues []Issue
 	if file.Header.Module == "" {
 		issues = append(issues, Issue{
