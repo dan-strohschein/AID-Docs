@@ -25,6 +25,8 @@ func main() {
 		cmdReview(os.Args[2:])
 	case "stale":
 		cmdStale(os.Args[2:])
+	case "update":
+		cmdUpdate(os.Args[2:])
 	default:
 		printUsage()
 		os.Exit(1)
@@ -38,6 +40,7 @@ Commands:
   generate    Build a generator prompt from L1 AID + source code
   review      Build a reviewer prompt from L2 draft AID
   stale       Check which [src:] references are stale vs current git HEAD
+  update      Build an incremental update prompt for stale claims only
 
 Run aid-gen-l2 <command> -help for command-specific flags.
 `)
@@ -144,4 +147,36 @@ func cmdStale(args []string) {
 		fmt.Printf("    claim: %s\n\n", sc.ClaimText)
 	}
 	os.Exit(1)
+}
+
+func cmdUpdate(args []string) {
+	fs := flag.NewFlagSet("update", flag.ExitOnError)
+	aidPath := fs.String("aid", "", "Path to .aid file with @code_version (required)")
+	projectRoot := fs.String("project-root", ".", "Path to project root (git repo)")
+	fs.Parse(args)
+
+	if *aidPath == "" {
+		fmt.Fprintf(os.Stderr, "Usage: aid-gen-l2 update --aid file.aid [--project-root ./]\n")
+		os.Exit(1)
+	}
+
+	aidFile, _, err := parser.ParseFile(*aidPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error parsing AID file: %v\n", err)
+		os.Exit(1)
+	}
+
+	staleClaims, err := l2.CheckStaleness(aidFile, *projectRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error checking staleness: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(staleClaims) == 0 {
+		fmt.Fprintln(os.Stderr, "No stale claims found. AID is up to date.")
+		return
+	}
+
+	prompt := l2.BuildIncrementalPrompt(aidFile, staleClaims, *projectRoot)
+	fmt.Print(prompt)
 }

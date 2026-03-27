@@ -78,6 +78,7 @@ func AllRules() []Rule {
 		&DecisionFieldsRule{},
 		&ManifestFieldsRule{},
 		&SourceRefFormatRule{},
+		&SourceRefSecurityRule{},
 		&StatusValidRule{},
 		&CodeVersionFormatRule{},
 	}
@@ -334,6 +335,46 @@ func (r *SourceRefFormatRule) Check(file *parser.AidFile) []Issue {
 	}
 	for _, w := range file.Workflows {
 		checkFields("workflow:"+w.Name, w.Fields)
+	}
+	return issues
+}
+
+// SourceRefSecurityRule checks [src:] references for path traversal attacks.
+type SourceRefSecurityRule struct{}
+
+func (r *SourceRefSecurityRule) Name() string { return "source-ref-security" }
+func (r *SourceRefSecurityRule) Check(file *parser.AidFile) []Issue {
+	var issues []Issue
+
+	checkRefs := func(entryName string, fields map[string]parser.Field) {
+		for _, field := range fields {
+			for _, ref := range field.SourceRefs {
+				if strings.HasPrefix(ref.File, "/") {
+					issues = append(issues, Issue{
+						Rule: r.Name(), Severity: SeverityError,
+						Entry: entryName, Field: field.Name,
+						Message: fmt.Sprintf("absolute path in [src:] reference: %s", ref.File),
+					})
+				}
+				if strings.Contains(ref.File, "..") {
+					issues = append(issues, Issue{
+						Rule: r.Name(), Severity: SeverityError,
+						Entry: entryName, Field: field.Name,
+						Message: fmt.Sprintf("path traversal in [src:] reference: %s", ref.File),
+					})
+				}
+			}
+		}
+	}
+
+	for _, e := range file.Entries {
+		checkRefs(e.Name, e.Fields)
+	}
+	for _, w := range file.Workflows {
+		checkRefs("workflow:"+w.Name, w.Fields)
+	}
+	for _, a := range file.Annotations {
+		checkRefs(a.Kind+":"+a.Name, a.Fields)
 	}
 	return issues
 }

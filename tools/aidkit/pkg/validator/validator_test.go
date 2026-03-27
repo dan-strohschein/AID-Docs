@@ -314,6 +314,80 @@ func TestDecisionFieldsMissingChosen(t *testing.T) {
 	}
 }
 
+func TestSourceRefSecurityTraversal(t *testing.T) {
+	f, _, _ := parser.ParseString(`@module test
+@lang go
+@version 1.0.0
+@aid_version 0.1
+
+---
+
+@fn Get
+@purpose Get a value
+@sig () -> str
+@invariants
+  - Something [src: ../../etc/passwd:1]
+`)
+	issues := Validate(f)
+	found := false
+	for _, i := range issues {
+		if i.Rule == "source-ref-security" && i.Severity == SeverityError {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected source-ref-security error for path traversal")
+	}
+}
+
+func TestSourceRefSecurityAbsolute(t *testing.T) {
+	f, _, _ := parser.ParseString(`@module test
+@lang go
+@version 1.0.0
+@aid_version 0.1
+
+---
+
+@fn Get
+@purpose Get a value
+@sig () -> str
+@invariants
+  - Something [src: /etc/passwd:1]
+`)
+	issues := Validate(f)
+	found := false
+	for _, i := range issues {
+		if i.Rule == "source-ref-security" && i.Severity == SeverityError {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected source-ref-security error for absolute path")
+	}
+}
+
+func TestSourceRefSecuritySafe(t *testing.T) {
+	f, _, _ := parser.ParseString(`@module test
+@lang go
+@version 1.0.0
+@aid_version 0.1
+
+---
+
+@fn Get
+@purpose Get a value
+@sig () -> str
+@invariants
+  - Something [src: src/internal/pkg/file.go:42]
+`)
+	issues := Validate(f)
+	for _, i := range issues {
+		if i.Rule == "source-ref-security" {
+			t.Errorf("unexpected security issue for safe path: %s", i.Message)
+		}
+	}
+}
+
 func TestManifestFieldsComplete(t *testing.T) {
 	f, _, _ := parser.ParseString(`@manifest
 @project Test
