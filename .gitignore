@@ -14,3 +14,12 @@ aid-gen-go
 aid-parse
 aid-validate
 aid-gen-l2
+aid-gen-cs
+aid-gen-ts
+node_modules/
+bin/
+obj/
+*.dll
+*.pdb
+*.cache
+package-lock.json
