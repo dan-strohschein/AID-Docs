@@ -9,11 +9,12 @@ import (
 )
 
 var (
-	outputDir  = flag.String("output", ".aidocs", "Output directory for .aid files")
-	stdout     = flag.Bool("stdout", false, "Print output to stdout instead of writing files")
-	moduleName = flag.String("module", "", "Override the module name")
-	version    = flag.String("version", "0.0.0", "Library version for the AID header")
-	verbose    = flag.Bool("v", false, "Print progress information")
+	outputDir       = flag.String("output", ".aidocs", "Output directory for .aid files")
+	stdout          = flag.Bool("stdout", false, "Print output to stdout instead of writing files")
+	moduleName      = flag.String("module", "", "Override the module name")
+	version         = flag.String("version", "0.0.0", "Library version for the AID header")
+	verbose         = flag.Bool("v", false, "Print progress information")
+	includeInternal = flag.Bool("internal", false, "Include unexported functions (minimal: @fn + @sig only, for call-graph tools)")
 )
 
 func main() {
@@ -54,7 +55,7 @@ func processDir(dir string) error {
 		fmt.Fprintf(os.Stderr, "Extracting: %s → %s\n", dir, modName)
 	}
 
-	aidFile, err := ExtractPackage(dir, modName, *version)
+	aidFile, err := ExtractPackage(dir, modName, *version, *includeInternal)
 	if err != nil {
 		return err
 	}

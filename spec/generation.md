@@ -127,7 +127,7 @@ A human (library author or experienced user) reviews the AI-generated AID file a
 | `type Name interface` | `@trait Name` | |
 | `type Name int` + `iota` | `@type Name` / `@kind enum` | Variants from const block |
 | `type Name = Other` | `@type Name` / `@kind alias` | |
-| Exported (`Name`) vs unexported (`name`) | Only export capitalized names | Unexported = internal, skip |
+| Exported (`Name`) vs unexported (`name`) | Only export capitalized names | Unexported = internal, skip by default. Use `--internal` flag to include unexported functions with minimal info (`@fn` + `@sig` only) for call-graph tools like cartograph. |
 | Godoc comment | `@purpose` candidate | First sentence |
 | `const Name = value` | `@const Name` | |
 | `io.Closer` implementation | `@implements [Closeable]` | |

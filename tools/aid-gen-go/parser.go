@@ -12,7 +12,10 @@ import (
 )
 
 // ExtractPackage parses a Go package directory and produces an AidFile.
-func ExtractPackage(dir string, moduleName string, version string) (*AidFile, error) {
+// When includeInternal is true, unexported functions are included with minimal
+// info (@fn + @sig only) so call-graph tools like cartograph can trace the
+// complete call chain through internal helpers.
+func ExtractPackage(dir string, moduleName string, version string, includeInternal bool) (*AidFile, error) {
 	fset := token.NewFileSet()
 	pkgs, err := parser.ParseDir(fset, dir, nil, parser.ParseComments)
 	if err != nil {
@@ -62,12 +65,12 @@ func ExtractPackage(dir string, moduleName string, version string) (*AidFile, er
 
 	// Extract types (structs, interfaces, defined types)
 	for _, t := range dpkg.Types {
-		entries = append(entries, extractType(t)...)
+		entries = append(entries, extractType(t, includeInternal)...)
 	}
 
 	// Extract package-level functions
 	for _, f := range dpkg.Funcs {
-		if fn := extractFunc(f); fn != nil {
+		if fn := extractFunc(f, includeInternal); fn != nil {
 			entries = append(entries, *fn)
 		}
 	}
@@ -154,7 +157,7 @@ func extractVars(value *doc.Value) []Entry {
 	return entries
 }
 
-func extractType(t *doc.Type) []Entry {
+func extractType(t *doc.Type, includeInternal bool) []Entry {
 	var entries []Entry
 
 	for _, spec := range t.Decl.Specs {
@@ -211,7 +214,7 @@ func extractType(t *doc.Type) []Entry {
 	// Extract methods
 	methods := map[string][]string{} // typeName -> method names
 	for _, m := range t.Methods {
-		fn := extractDocFunc(m, t.Name)
+		fn := extractDocFunc(m, t.Name, includeInternal)
 		if fn != nil {
 			entries = append(entries, *fn)
 			methods[t.Name] = append(methods[t.Name], m.Name)
@@ -234,7 +237,7 @@ func extractType(t *doc.Type) []Entry {
 		entries = append(entries, extractConsts(c)...)
 	}
 	for _, f := range t.Funcs {
-		if fn := extractFunc(f); fn != nil {
+		if fn := extractFunc(f, includeInternal); fn != nil {
 			entries = append(entries, *fn)
 		}
 	}
@@ -311,12 +314,21 @@ func extractInterface(ts *ast.TypeSpec, iface *ast.InterfaceType, purpose string
 	}
 }
 
-func extractFunc(f *doc.Func) *FnEntry {
-	if !isExported(f.Name) {
+func extractFunc(f *doc.Func, includeInternal bool) *FnEntry {
+	if !isExported(f.Name) && !includeInternal {
 		return nil
 	}
-	purpose := firstSentence(f.Doc)
 	sig := buildFuncSig(f.Decl)
+
+	// Unexported functions get minimal entries (just @fn + @sig) for call-graph tools
+	if !isExported(f.Name) {
+		return &FnEntry{
+			Name: f.Name,
+			Sigs: []string{sig},
+		}
+	}
+
+	purpose := firstSentence(f.Doc)
 	params := extractParams(f.Decl.Type)
 	returns := extractReturnType(f.Decl.Type)
 
@@ -329,11 +341,10 @@ func extractFunc(f *doc.Func) *FnEntry {
 	}
 }
 
-func extractDocFunc(f *doc.Func, typeName string) *FnEntry {
-	if !isExported(f.Name) {
+func extractDocFunc(f *doc.Func, typeName string, includeInternal bool) *FnEntry {
+	if !isExported(f.Name) && !includeInternal {
 		return nil
 	}
-	purpose := firstSentence(f.Doc)
 
 	isPointer := false
 	if f.Decl.Recv != nil && len(f.Decl.Recv.List) > 0 {
@@ -341,11 +352,19 @@ func extractDocFunc(f *doc.Func, typeName string) *FnEntry {
 	}
 
 	sig := buildMethodSigFromDecl(f.Decl, isPointer)
+	name := typeName + "." + f.Name
+
+	// Unexported methods get minimal entries for call-graph tools
+	if !isExported(f.Name) {
+		return &FnEntry{
+			Name: name,
+			Sigs: []string{sig},
+		}
+	}
+
+	purpose := firstSentence(f.Doc)
 	params := extractParams(f.Decl.Type)
 	returns := extractReturnType(f.Decl.Type)
-
-	// Remove receiver from params (it's represented as self in the sig)
-	name := typeName + "." + f.Name
 
 	return &FnEntry{
 		Name:    name,
