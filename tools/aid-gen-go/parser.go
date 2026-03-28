@@ -630,8 +630,25 @@ func receiverTypeName(expr ast.Expr) string {
 }
 
 // extractCalls walks a function body's AST to find all function/method calls.
-// Returns a deduplicated, sorted list of callee names (e.g., ["Foo", "Bar.Baz"]).
+// Returns a deduplicated, sorted list of callee names (e.g., ["Foo", "Type.Method"]).
+// receiverVar is the receiver variable name (e.g., "c" for "(c *Checker)"),
+// receiverType is the type name (e.g., "Checker"). When a call like c.foo()
+// is found, it's mapped to Checker.foo in the output.
 func extractCalls(decl *ast.FuncDecl) []string {
+	// Determine receiver variable name and type for self-call mapping
+	var receiverVar, receiverType string
+	if decl.Recv != nil && len(decl.Recv.List) > 0 {
+		recv := decl.Recv.List[0]
+		if len(recv.Names) > 0 {
+			receiverVar = recv.Names[0].Name
+		}
+		receiverType = receiverTypeName(recv.Type)
+	}
+
+	return extractCallsWithReceiver(decl, receiverVar, receiverType)
+}
+
+func extractCallsWithReceiver(decl *ast.FuncDecl, receiverVar, receiverType string) []string {
 	if decl.Body == nil {
 		return nil
 	}
@@ -651,6 +668,10 @@ func extractCalls(decl *ast.FuncDecl) []string {
 		case *ast.SelectorExpr:
 			// Method or qualified call: obj.Method() or pkg.Func()
 			name = selectorName(fn)
+			// Map receiver variable to type name: c.checkExpr → Checker.checkExpr
+			if receiverVar != "" && receiverType != "" && strings.HasPrefix(name, receiverVar+".") {
+				name = receiverType + name[len(receiverVar):]
+			}
 		}
 
 		if name != "" && !seen[name] {
