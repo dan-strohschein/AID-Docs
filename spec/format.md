@@ -988,6 +988,137 @@ Large projects (20+ packages) should include a `.aidocs/manifest.aid` file that 
 
 **Agent workflow:** Read manifest first. Identify relevant packages by matching the task description against `@purpose` fields. Load only those AID files plus their `@depends` chain. This prevents the token bloat seen in benchmarks when all AID files are loaded indiscriminately.
 
+### 10.4.1 Project snapshot
+
+The manifest header may include a **project snapshot** — a compressed, canonical representation of the project's shape and recent changes. The snapshot gives an agent full project orientation in a single read, without loading any individual AID files.
+
+The snapshot has two parts: **shape** (what the project is) and **delta** (what changed).
+
+#### Shape fields
+
+Shape fields appear in the manifest header (before the first `---` separator), alongside `@manifest` and `@project`.
+
+```
+@manifest
+@project SyndrDB
+@aid_version 0.1
+@lang go
+@shape
+  Entry points: cmd/syndrdb (CLI), pkg/client (library), internal/graphQL (API)
+  Data flow: query → parser → planner → executor → storage → bundlestore
+  Key types: Bundle, Document, FieldValue, BundleFieldSchema, QueryPlan, ExecutionNode
+  Boundaries: domain (pure logic), storage (disk I/O), query (planning + execution), server (network)
+  Scale: 496 source files, 214K lines, 72 modules
+@entry_points [cmd/syndrdb, pkg/client, internal/graphQL/server]
+@key_types [Bundle, Document, FieldValue, BundleFieldSchema, QueryPlan, ExecutionNode]
+```
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `@shape` | No | multi-line | Free-form structural summary. Entry points, data flow, key types, architectural boundaries, scale. One concept per line. |
+| `@entry_points` | No | list | Packages that serve as entry points (CLIs, servers, library roots). Agents start navigation here. |
+| `@key_types` | No | list | The 5-10 most important types in the project. Types that appear in many signatures across many modules. |
+
+The `@shape` block is intentionally free-form. Different projects have different architectural concepts worth surfacing. The only rule is one concept per continuation line, keeping each line greppable and parseable.
+
+`@entry_points` and `@key_types` are structured lists that enable programmatic use — Cartograph-style tools can prioritize these nodes in the graph.
+
+#### Delta fields
+
+Delta fields track what changed since a reference point, enabling agents to skip re-reading unchanged modules across conversations.
+
+```
+@manifest
+@project SyndrDB
+@aid_version 0.1
+@snapshot_version git:abc1234
+@snapshot_timestamp 2026-03-27T18:00:00Z
+@delta
+  modified: [query/planner, storage/flusher]
+  added: [monitoring/metrics]
+  removed: [legacy/importer]
+  unchanged: 69 packages
+```
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `@snapshot_version` | No | string | Reference point for the delta. Format: `git:SHORT_HASH`. Agents compare this against their last-seen version. |
+| `@snapshot_timestamp` | No | string | ISO 8601 timestamp of when the snapshot was generated. Agents use this to judge staleness. |
+| `@delta` | No | multi-line | Changes since the previous snapshot version. Lines use `key: [list]` format. |
+
+Delta line keys:
+
+| Key | Meaning |
+|-----|---------|
+| `modified` | Packages whose AID files changed (agent should re-read these) |
+| `added` | New packages not present in the previous snapshot |
+| `removed` | Packages that no longer exist |
+| `unchanged` | Count or list of packages with no changes (agent can skip these) |
+
+**Agent workflow with snapshots:**
+
+1. Read manifest header — get `@shape` for project orientation, `@snapshot_version` for delta tracking
+2. Compare `@snapshot_version` against the agent's last-seen version (stored in conversation memory or session state)
+3. If versions match: the agent's cached understanding is current. No AID files need to be loaded.
+4. If versions differ: read `@delta` to identify what changed. Load only `modified` and `added` packages.
+5. If no previous version exists (first contact): use `@shape` + `@entry_points` + `@key_types` for orientation, then selectively load packages as needed.
+
+This workflow is additive — agents that don't track versions simply ignore the delta fields and use the manifest as before.
+
+#### Full manifest example with snapshot
+
+```
+@manifest
+@project SyndrDB
+@aid_version 0.1
+@lang go
+@shape
+  Entry points: cmd/syndrdb (CLI), pkg/client (library), internal/graphQL (API)
+  Data flow: query → parser → planner → executor → storage → bundlestore
+  Key types: Bundle, Document, FieldValue, BundleFieldSchema, QueryPlan, ExecutionNode
+  Boundaries: domain (pure logic), storage (disk I/O), query (planning + execution), server (network)
+  Scale: 496 source files, 214K lines, 72 modules
+@entry_points [cmd/syndrdb, pkg/client, internal/graphQL/server]
+@key_types [Bundle, Document, FieldValue, BundleFieldSchema, QueryPlan, ExecutionNode]
+@snapshot_version git:f56db52
+@snapshot_timestamp 2026-03-27T18:00:00Z
+@delta
+  modified: [query/planner, storage/flusher]
+  added: [monitoring/metrics]
+  removed: [legacy/importer]
+  unchanged: 69 packages
+
+---
+
+@package query/planner
+@aid_file planner.aid
+@aid_status reviewed
+@depends [syndrQL, domain/index, domain/models]
+@purpose Query planning and optimization — converts parsed queries into execution plans
+@layer l2
+@key_risks BRIN is lossy (needs FilterNode), index selection order matters, plan immutability
+
+---
+
+@package monitoring/metrics
+@aid_file metrics.aid
+@aid_status draft
+@depends [domain/models]
+@purpose Prometheus metrics collection and export
+@layer l1
+```
+
+#### Snapshot generation
+
+Snapshots should be auto-generated by tooling, not manually maintained. The generation workflow:
+
+1. Run `aid-manifest-gen` after AID files are generated or updated
+2. Tool computes `@snapshot_version` from the current git HEAD
+3. Tool diffs against the previous manifest to produce `@delta`
+4. Tool extracts `@shape`, `@entry_points`, and `@key_types` from the AID files (entry points from packages with CLI/server entry kinds, key types from types that appear in the most cross-module `@sig` references)
+
+The `@shape` block may be seeded automatically and refined by a human or L2 agent. The structured fields (`@entry_points`, `@key_types`, `@snapshot_version`, `@delta`) are fully automatable.
+
 ### 10.5 Discovery protocol
 
 When an agent or tool needs to find AID files, it follows this discovery chain:

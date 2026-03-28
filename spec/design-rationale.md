@@ -343,3 +343,33 @@ The vendor directory (`.aidocs/vendor/`) handles the common case where a project
 `[src:]` references are paths that tools resolve and read. A malicious AID file could reference `../../.env` or `/etc/passwd`, causing a reviewer agent to read sensitive files and potentially expose them in its output. Path traversal prevention must be explicitly called out because the natural assumption — "it's just documentation" — understates the risk.
 
 This is especially important because AID files can be AI-generated. If the L2 generator processes source code containing prompt injection (crafted comments or string literals), it could produce AID files with misleading claims or malicious source references. The spec must establish that AID files are trusted artifacts, not untrusted input.
+
+## 32. Why project snapshots in the manifest?
+
+The manifest (rationale #29) solves selective loading — reading the right AID files for a given task. But agents have a second, equally expensive problem: **re-orientation across conversations.**
+
+Every new conversation or context window starts cold. The agent has no memory of the project's shape. It must re-read files to rebuild its understanding, even if nothing changed. For a 72-module project, this costs ~379K tokens (the full AID corpus) before the agent can do any useful work.
+
+Project snapshots solve this in two ways:
+
+**Shape fields** (`@shape`, `@entry_points`, `@key_types`) give the agent a compressed orientation in ~200 tokens instead of loading all AID files. An agent reading the manifest for the first time gets: what the project does, how data flows through it, which types are central, and where to start navigating. This replaces the "read everything, then figure out what matters" pattern.
+
+**Delta fields** (`@snapshot_version`, `@delta`) enable incremental updates. An agent that previously read the project can compare its last-seen version against `@snapshot_version`. If only 2 of 72 packages changed, the agent loads only those 2 instead of all 72. For multi-conversation workflows (e.g., an agent working on a project over days), this eliminates redundant re-reading entirely.
+
+The design keeps snapshots in the manifest rather than a separate file because the manifest is already the agent's first read. Adding snapshot fields to the manifest header means the agent gets orientation + change tracking + package index in a single file read — no additional I/O.
+
+## 33. Why free-form `@shape` instead of structured fields?
+
+Different projects have different architectural concepts worth surfacing. A microservices project needs to describe service boundaries and communication patterns. A CLI tool needs to describe command structure and flag parsing. A library needs to describe its public API surface and extension points.
+
+A structured schema (e.g., `@data_flow`, `@service_boundaries`, `@api_surface`) would either be too generic to be useful or too specific to be universal. The `@shape` block uses free-form continuation lines — each line is one concept, greppable and scannable, but the concepts themselves are project-defined.
+
+The structured fields (`@entry_points`, `@key_types`) extract the two concepts that are universal across all projects: where to start and what matters most. These are lists, not prose, because tooling can act on them programmatically (Cartograph can prioritize these nodes, IDE integrations can highlight them).
+
+## 34. Why `@snapshot_version` uses git hashes?
+
+The delta needs a reference point that is unambiguous, universal, and automatable. Git commit hashes satisfy all three: they uniquely identify a code state, every project uses git, and tooling can compute them without configuration.
+
+Semver (`@version`) was considered but rejected because library versions change infrequently while code changes constantly. An agent needs to know "has anything changed since the last time I read this?" — that's a commit-level question, not a release-level question.
+
+The format `git:SHORT_HASH` is explicit about the version control system, leaving room for future alternatives (e.g., `svn:REV`, `hg:NODE`) without ambiguity.

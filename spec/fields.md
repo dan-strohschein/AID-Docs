@@ -241,6 +241,8 @@ Bounds appear in two places:
 
 ## Manifest fields (`manifest.aid`)
 
+### Core manifest fields
+
 | Field | Required | Type | Description |
 |-------|----------|------|-------------|
 | `@manifest` | Yes | — | Marker identifying this as a manifest file |
@@ -251,6 +253,36 @@ Bounds appear in two places:
 | `@depends` | No | list | Packages this one calls into |
 | `@purpose` | Yes | string | One-line description for relevance filtering |
 | `@layer` | No | enum | `l1` or `l2` — documentation depth available |
+| `@key_risks` | No | string | 1-2 critical things about this package |
+
+### Project snapshot fields (manifest header)
+
+These fields appear in the manifest header (before the first `---`), alongside `@manifest` and `@project`.
+
+#### Shape fields
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `@shape` | No | multi-line | Free-form structural summary: entry points, data flow, key types, boundaries, scale. One concept per continuation line. |
+| `@entry_points` | No | list | Packages that serve as entry points (CLIs, servers, library roots) |
+| `@key_types` | No | list | The 5-10 most important types in the project — types referenced across many modules |
+
+#### Delta fields
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `@snapshot_version` | No | string | Git reference point for the delta. Format: `git:SHORT_HASH` |
+| `@snapshot_timestamp` | No | string | ISO 8601 timestamp of snapshot generation |
+| `@delta` | No | multi-line | Changes since previous snapshot. Lines use `key: [list]` or `key: count` format |
+
+Delta line keys:
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `modified` | list | Packages whose AID files changed since `@snapshot_version` |
+| `added` | list | New packages not in the previous snapshot |
+| `removed` | list | Packages that no longer exist |
+| `unchanged` | int or list | Packages with no changes (count for brevity, list for precision) |
 
 ---
 
