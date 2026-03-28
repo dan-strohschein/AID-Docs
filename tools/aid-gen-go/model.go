@@ -32,6 +32,7 @@ type FnEntry struct {
 	Params     []Param
 	Returns    string
 	Errors     []string
+	Calls      []string // Functions/methods this function calls
 	Pre        string
 	Post       string
 	Effects    []string
@@ -41,6 +42,8 @@ type FnEntry struct {
 	Deprecated string
 	Related    []string
 	Example    string
+	SourceFile string // Relative path to source file
+	SourceLine int    // Line number of definition
 }
 
 func (FnEntry) entryKind() string { return "fn" }

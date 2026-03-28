@@ -34,7 +34,11 @@ func ExtractPackage(dir string, moduleName string, version string, includeIntern
 		return nil, fmt.Errorf("no non-test package found in %s", dir)
 	}
 
-	// Use go/doc for organized access
+	// Extract call relationships and source positions BEFORE doc.New strips bodies.
+	// doc.New mutates the AST in place, setting Body to nil on all FuncDecls.
+	funcCalls, funcPositions := extractAllCallsAndPositions(pkg, fset, dir)
+
+	// Use go/doc for organized access (note: doc.New strips function bodies)
 	dpkg := doc.New(pkg, moduleName, doc.AllDecls)
 
 	if moduleName == "" {
@@ -65,12 +69,33 @@ func ExtractPackage(dir string, moduleName string, version string, includeIntern
 
 	// Extract types (structs, interfaces, defined types)
 	for _, t := range dpkg.Types {
-		entries = append(entries, extractType(t, includeInternal)...)
+		typeEntries := extractType(t, includeInternal)
+		// Add source location and calls to method entries
+		for i, e := range typeEntries {
+			if fn, ok := e.(FnEntry); ok {
+				if c, exists := funcCalls[fn.Name]; exists {
+					fn.Calls = c
+				}
+				if p, exists := funcPositions[fn.Name]; exists {
+					fn.SourceFile = p.File
+					fn.SourceLine = p.Line
+				}
+				typeEntries[i] = fn
+			}
+		}
+		entries = append(entries, typeEntries...)
 	}
 
 	// Extract package-level functions
 	for _, f := range dpkg.Funcs {
 		if fn := extractFunc(f, includeInternal); fn != nil {
+			if c, exists := funcCalls[f.Name]; exists {
+				fn.Calls = c
+			}
+			if p, exists := funcPositions[f.Name]; exists {
+				fn.SourceFile = p.File
+				fn.SourceLine = p.Line
+			}
 			entries = append(entries, *fn)
 		}
 	}
@@ -535,6 +560,153 @@ func extractGenericParams(ts *ast.TypeSpec) string {
 		}
 	}
 	return strings.Join(params, ", ")
+}
+
+// sourcePos holds a function's source file and line.
+type sourcePos struct {
+	File string
+	Line int
+}
+
+// extractAllCallsAndPositions walks the raw AST BEFORE doc.New strips bodies.
+// Returns two maps keyed by function name ("funcName" or "TypeName.MethodName"):
+// - calls: function name → list of callee names
+// - positions: function name → source file and line
+func extractAllCallsAndPositions(pkg *ast.Package, fset *token.FileSet, dir string) (map[string][]string, map[string]sourcePos) {
+	calls := map[string][]string{}
+	positions := map[string]sourcePos{}
+
+	for _, file := range pkg.Files {
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok {
+				continue
+			}
+
+			var key string
+			if fn.Recv != nil && len(fn.Recv.List) > 0 {
+				typeName := receiverTypeName(fn.Recv.List[0].Type)
+				if typeName != "" {
+					key = typeName + "." + fn.Name.Name
+				}
+			} else {
+				key = fn.Name.Name
+			}
+
+			if key == "" {
+				continue
+			}
+
+			pos := fset.Position(fn.Pos())
+			positions[key] = sourcePos{
+				File: relPath(pos.Filename, dir),
+				Line: pos.Line,
+			}
+
+			if fn.Body != nil {
+				calls[key] = extractCalls(fn)
+			}
+		}
+	}
+	return calls, positions
+}
+
+// receiverTypeName extracts the type name from a method receiver.
+func receiverTypeName(expr ast.Expr) string {
+	switch t := expr.(type) {
+	case *ast.Ident:
+		return t.Name
+	case *ast.StarExpr:
+		return receiverTypeName(t.X)
+	case *ast.IndexExpr:
+		// Generic type: T[P]
+		return receiverTypeName(t.X)
+	case *ast.IndexListExpr:
+		// Generic type with multiple params: T[P, Q]
+		return receiverTypeName(t.X)
+	default:
+		return ""
+	}
+}
+
+// extractCalls walks a function body's AST to find all function/method calls.
+// Returns a deduplicated, sorted list of callee names (e.g., ["Foo", "Bar.Baz"]).
+func extractCalls(decl *ast.FuncDecl) []string {
+	if decl.Body == nil {
+		return nil
+	}
+
+	seen := map[string]bool{}
+	ast.Inspect(decl.Body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+
+		var name string
+		switch fn := call.Fun.(type) {
+		case *ast.Ident:
+			// Simple function call: Foo()
+			name = fn.Name
+		case *ast.SelectorExpr:
+			// Method or qualified call: obj.Method() or pkg.Func()
+			name = selectorName(fn)
+		}
+
+		if name != "" && !seen[name] {
+			seen[name] = true
+		}
+		return true
+	})
+
+	if len(seen) == 0 {
+		return nil
+	}
+
+	calls := make([]string, 0, len(seen))
+	for name := range seen {
+		calls = append(calls, name)
+	}
+	// Sort for deterministic output
+	sortStrings(calls)
+	return calls
+}
+
+// selectorName extracts "Receiver.Method" or "pkg.Func" from a SelectorExpr.
+func selectorName(sel *ast.SelectorExpr) string {
+	method := sel.Sel.Name
+	switch x := sel.X.(type) {
+	case *ast.Ident:
+		// Could be: obj.Method(), pkg.Func(), or Type.StaticMethod()
+		// We use the identifier name + method name
+		return x.Name + "." + method
+	case *ast.SelectorExpr:
+		// Chained: obj.field.Method() — use the deepest selector
+		return selectorName(x) + "." + method
+	case *ast.CallExpr:
+		// Function call result: foo().Method() — just use the method name
+		return method
+	default:
+		// Type assertion, index, etc. — just use the method name
+		return method
+	}
+}
+
+// relPath returns a path relative to base, or the original if relativing fails.
+func relPath(path, base string) string {
+	rel, err := filepath.Rel(base, path)
+	if err != nil {
+		return path
+	}
+	return rel
+}
+
+func sortStrings(s []string) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j] < s[j-1]; j-- {
+			s[j], s[j-1] = s[j-1], s[j]
+		}
+	}
 }
 
 // --- Helpers ---

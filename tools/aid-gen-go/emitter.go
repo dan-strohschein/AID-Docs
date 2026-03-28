@@ -78,6 +78,15 @@ func emitFn(b *strings.Builder, e *FnEntry) {
 	if e.Post != "" {
 		fmt.Fprintf(b, "@post %s\n", e.Post)
 	}
+	if len(e.Calls) > 0 {
+		fmt.Fprintf(b, "@calls [%s]\n", strings.Join(e.Calls, ", "))
+	}
+	if e.SourceFile != "" {
+		fmt.Fprintf(b, "@source_file %s\n", e.SourceFile)
+	}
+	if e.SourceLine > 0 {
+		fmt.Fprintf(b, "@source_line %d\n", e.SourceLine)
+	}
 	if len(e.Effects) > 0 {
 		fmt.Fprintf(b, "@effects [%s]\n", strings.Join(e.Effects, ", "))
 	}
