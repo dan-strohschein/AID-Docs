@@ -23,3 +23,7 @@ obj/
 *.pdb
 *.cache
 package-lock.json
+
+# Private plans — not for public repos
+LaunchPlan.md
+BusinessPlan.md
