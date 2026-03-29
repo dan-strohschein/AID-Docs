@@ -15,6 +15,7 @@ var (
 	version         = flag.String("version", "0.0.0", "Library version for the AID header")
 	verbose         = flag.Bool("v", false, "Print progress information")
 	includeInternal = flag.Bool("internal", false, "Include unexported functions (minimal: @fn + @sig only, for call-graph tools)")
+	includeTests    = flag.Bool("test", false, "Generate AID files for test packages (mock types, test helpers)")
 )
 
 func main() {
@@ -60,6 +61,39 @@ func processDir(dir string) error {
 		return err
 	}
 
+	if err := writeAidFile(modName, aidFile); err != nil {
+		return err
+	}
+
+	// Generate test package AID if --test is set
+	if *includeTests {
+		if err := processTestDir(dir, modName); err != nil {
+			// Not an error if no test symbols found — just skip
+			if *verbose {
+				fmt.Fprintf(os.Stderr, "  (no test symbols in %s: %v)\n", dir, err)
+			}
+		}
+	}
+
+	return nil
+}
+
+func processTestDir(dir string, modName string) error {
+	testModName := modName + "_test"
+
+	if *verbose {
+		fmt.Fprintf(os.Stderr, "Extracting tests: %s → %s\n", dir, testModName)
+	}
+
+	aidFile, err := ExtractTestPackage(dir, testModName, *version)
+	if err != nil {
+		return err
+	}
+
+	return writeAidFile(testModName, aidFile)
+}
+
+func writeAidFile(modName string, aidFile *AidFile) error {
 	output := Emit(aidFile)
 
 	if *stdout {
@@ -67,7 +101,6 @@ func processDir(dir string) error {
 		return nil
 	}
 
-	// Write to file
 	if err := os.MkdirAll(*outputDir, 0o755); err != nil {
 		return fmt.Errorf("create output dir: %w", err)
 	}
@@ -120,11 +153,14 @@ func findGoDirs(root string) ([]string, error) {
 		if info.IsDir() && (strings.HasPrefix(name, ".") || name == "vendor" || name == "node_modules") {
 			return filepath.SkipDir
 		}
-		if !info.IsDir() && strings.HasSuffix(name, ".go") && !strings.HasSuffix(name, "_test.go") {
-			dir := filepath.Dir(path)
-			if !seen[dir] {
-				seen[dir] = true
-				dirs = append(dirs, dir)
+		if !info.IsDir() && strings.HasSuffix(name, ".go") {
+			// Include non-test .go files always; include _test.go dirs when --test is set
+			if !strings.HasSuffix(name, "_test.go") || *includeTests {
+				dir := filepath.Dir(path)
+				if !seen[dir] {
+					seen[dir] = true
+					dirs = append(dirs, dir)
+				}
 			}
 		}
 		return nil

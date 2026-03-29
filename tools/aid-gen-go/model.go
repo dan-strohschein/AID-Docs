@@ -60,20 +60,22 @@ type Param struct {
 
 // TypeEntry describes a struct, enum, alias, or newtype.
 type TypeEntry struct {
-	Name         string
-	Kind         string // struct, enum, union, class, alias, newtype
-	Purpose      string
-	Fields       []Field
-	Variants     []Variant
-	Invariants   []string
-	Constructors string
-	Methods      []string
-	Extends      []string
-	Implements   []string
+	Name          string
+	Kind          string // struct, enum, union, class, alias, newtype
+	Purpose       string
+	Fields        []Field
+	Variants      []Variant
+	Invariants    []string
+	Constructors  string
+	Methods       []string
+	Extends       []string
+	Implements    []string
 	GenericParams string
-	Since        string
-	Deprecated   string
-	Related      []string
+	Since         string
+	Deprecated    string
+	Related       []string
+	SourceFile    string // Relative path to source file
+	SourceLine    int    // Line number of definition
 }
 
 func (TypeEntry) entryKind() string { return "type" }

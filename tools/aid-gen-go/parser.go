@@ -6,6 +6,7 @@ import (
 	"go/doc"
 	"go/parser"
 	"go/token"
+	"os"
 	"path/filepath"
 	"strings"
 	"unicode"
@@ -17,7 +18,11 @@ import (
 // complete call chain through internal helpers.
 func ExtractPackage(dir string, moduleName string, version string, includeInternal bool) (*AidFile, error) {
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, dir, nil, parser.ParseComments)
+	// Filter out test files — they are handled separately by ExtractTestPackage
+	noTests := func(fi os.FileInfo) bool {
+		return !strings.HasSuffix(fi.Name(), "_test.go")
+	}
+	pkgs, err := parser.ParseDir(fset, dir, noTests, parser.ParseComments)
 	if err != nil {
 		return nil, fmt.Errorf("parse error: %w", err)
 	}
@@ -104,6 +109,221 @@ func ExtractPackage(dir string, moduleName string, version string, includeIntern
 		Header:  header,
 		Entries: entries,
 	}, nil
+}
+
+// ExtractTestPackage parses a Go test package and produces an AidFile containing
+// only mock types, test helper functions, and test-only interfaces — symbols that
+// form edges back into production code. Individual TestFoo/BenchmarkFoo functions
+// are excluded as they are too numerous and volatile.
+func ExtractTestPackage(dir string, moduleName string, version string) (*AidFile, error) {
+	fset := token.NewFileSet()
+
+	// Only parse _test.go files
+	filter := func(fi os.FileInfo) bool {
+		return strings.HasSuffix(fi.Name(), "_test.go")
+	}
+	pkgs, err := parser.ParseDir(fset, dir, filter, parser.ParseComments)
+	if err != nil {
+		return nil, fmt.Errorf("parse error: %w", err)
+	}
+
+	if len(pkgs) == 0 {
+		return nil, fmt.Errorf("no test package found in %s", dir)
+	}
+
+	// Pick any package (prefer _test suffix, fall back to the main package's test files)
+	var pkg *ast.Package
+	for name, p := range pkgs {
+		if strings.HasSuffix(name, "_test") {
+			pkg = p
+			break
+		}
+		pkg = p // fallback: test files in the same package
+	}
+
+	// Extract calls and positions before doc.New strips bodies
+	funcCalls, funcPositions := extractAllCallsAndPositions(pkg, fset, dir)
+
+	dpkg := doc.New(pkg, moduleName, doc.AllDecls)
+
+	purpose := firstSentence(dpkg.Doc)
+	if purpose == "" {
+		purpose = "Test package for " + moduleName
+	}
+
+	header := ModuleHeader{
+		Module:     moduleName,
+		Lang:       "go",
+		Version:    version,
+		Purpose:    purpose,
+		AidVersion: "0.1",
+	}
+
+	var entries []Entry
+
+	// Extract types — keep mock types and test-only interfaces, skip plain test helpers structs
+	for _, t := range dpkg.Types {
+		typeEntries := extractTestType(t, fset, dir, funcCalls, funcPositions)
+		entries = append(entries, typeEntries...)
+	}
+
+	// Extract package-level functions — keep test helpers, skip TestFoo/BenchmarkFoo/ExampleFoo
+	for _, f := range dpkg.Funcs {
+		if isTestOrBenchFunc(f.Name) {
+			continue
+		}
+		fn := extractFunc(f, false)
+		if fn == nil {
+			continue
+		}
+		if c, exists := funcCalls[f.Name]; exists {
+			fn.Calls = c
+		}
+		if p, exists := funcPositions[f.Name]; exists {
+			fn.SourceFile = p.File
+			fn.SourceLine = p.Line
+		}
+		entries = append(entries, *fn)
+	}
+
+	if len(entries) == 0 {
+		return nil, fmt.Errorf("no test-relevant symbols found in %s", dir)
+	}
+
+	return &AidFile{
+		Header:  header,
+		Entries: entries,
+	}, nil
+}
+
+// extractTestType extracts a test type and its methods. For mock/stub types
+// (identified by name prefix or interface implementation), it includes full
+// details. Returns nil for types that don't form useful edges.
+func extractTestType(t *doc.Type, fset *token.FileSet, dir string, funcCalls map[string][]string, funcPositions map[string]sourcePos) []Entry {
+	var entries []Entry
+
+	for _, spec := range t.Decl.Specs {
+		ts, ok := spec.(*ast.TypeSpec)
+		if !ok {
+			continue
+		}
+
+		name := ts.Name.Name
+		if !isMockOrStubType(name) && !isTestInterface(ts) {
+			continue
+		}
+
+		purpose := firstSentence(t.Doc)
+
+		switch typ := ts.Type.(type) {
+		case *ast.StructType:
+			entry := extractStruct(ts, typ, purpose)
+			// Find which interfaces this mock implements by looking at embedded fields
+			// and the @related tag
+			entry.Related = inferMockRelated(name, typ)
+			if p, exists := funcPositions[name]; exists {
+				entry.SourceFile = p.File
+				entry.SourceLine = p.Line
+			} else {
+				// Types don't appear in funcPositions; get position from the AST
+				pos := fset.Position(ts.Pos())
+				entry.SourceFile = relPath(pos.Filename, dir)
+				entry.SourceLine = pos.Line
+			}
+			entries = append(entries, entry)
+
+		case *ast.InterfaceType:
+			entry := extractInterface(ts, typ, purpose)
+			entries = append(entries, entry)
+
+		default:
+			entries = append(entries, TypeEntry{
+				Name:    name,
+				Kind:    "struct",
+				Purpose: purpose,
+			})
+		}
+	}
+
+	// Extract methods for mock types
+	for _, m := range t.Methods {
+		key := t.Name + "." + m.Name
+		fn := extractDocFunc(m, t.Name, false)
+		if fn == nil {
+			// Include unexported methods on mock types too — they often implement interfaces
+			fn = extractDocFunc(m, t.Name, true)
+		}
+		if fn == nil {
+			continue
+		}
+		if c, exists := funcCalls[key]; exists {
+			fn.Calls = c
+		}
+		if p, exists := funcPositions[key]; exists {
+			fn.SourceFile = p.File
+			fn.SourceLine = p.Line
+		}
+		entries = append(entries, *fn)
+	}
+
+	return entries
+}
+
+// isTestOrBenchFunc returns true for TestXxx, BenchmarkXxx, ExampleXxx, FuzzXxx functions.
+func isTestOrBenchFunc(name string) bool {
+	for _, prefix := range []string{"Test", "Benchmark", "Example", "Fuzz"} {
+		if strings.HasPrefix(name, prefix) {
+			rest := strings.TrimPrefix(name, prefix)
+			// Must be followed by uppercase letter or be exactly the prefix
+			if rest == "" || unicode.IsUpper(rune(rest[0])) || rest[0] == '_' {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isMockOrStubType returns true if the type name suggests it's a mock, stub, fake, or spy.
+func isMockOrStubType(name string) bool {
+	lower := strings.ToLower(name)
+	for _, prefix := range []string{"mock", "stub", "fake", "spy"} {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	// Also match suffixed patterns like FooMock, FooStub
+	for _, suffix := range []string{"mock", "stub", "fake", "spy"} {
+		if strings.HasSuffix(lower, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// isTestInterface checks if a type spec is an interface (test-only interfaces
+// are useful for documenting test contracts).
+func isTestInterface(ts *ast.TypeSpec) bool {
+	_, ok := ts.Type.(*ast.InterfaceType)
+	return ok
+}
+
+// inferMockRelated tries to guess which interface a mock type implements
+// based on naming conventions (e.g., mockFooService → FooService).
+func inferMockRelated(name string, st *ast.StructType) []string {
+	lower := strings.ToLower(name)
+	var related []string
+
+	// Strip mock/stub/fake/spy prefix (case-insensitive)
+	for _, prefix := range []string{"mock", "stub", "fake", "spy"} {
+		if strings.HasPrefix(lower, prefix) {
+			rest := name[len(prefix):]
+			if rest != "" {
+				related = append(related, rest)
+			}
+			return related
+		}
+	}
+	return related
 }
 
 func extractConsts(value *doc.Value) []Entry {

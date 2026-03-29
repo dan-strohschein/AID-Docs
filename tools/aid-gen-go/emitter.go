@@ -172,8 +172,14 @@ func emitType(b *strings.Builder, e *TypeEntry) {
 	if len(e.Implements) > 0 {
 		fmt.Fprintf(b, "@implements [%s]\n", strings.Join(e.Implements, ", "))
 	}
+	if e.SourceFile != "" {
+		fmt.Fprintf(b, "@source_file %s\n", e.SourceFile)
+	}
+	if e.SourceLine > 0 {
+		fmt.Fprintf(b, "@source_line %d\n", e.SourceLine)
+	}
 	if len(e.Related) > 0 {
-		fmt.Fprintf(b, "@related %s\n", strings.Join(e.Related, ", "))
+		fmt.Fprintf(b, "@related [%s]\n", strings.Join(e.Related, ", "))
 	}
 }
 
