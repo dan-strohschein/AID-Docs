@@ -105,6 +105,53 @@ func ExtractPackage(dir string, moduleName string, version string, includeIntern
 		}
 	}
 
+	// Emit minimal entries for unexported functions referenced by @calls.
+	// This ensures the call graph has nodes for all internal callees without
+	// requiring --internal flag. Only functions that exist in this package
+	// (present in funcPositions) get entries. Iterates until no new entries
+	// are needed (transitive closure of internal call chains).
+	if !includeInternal {
+		emitted := map[string]bool{}
+		for _, e := range entries {
+			if fn, ok := e.(FnEntry); ok {
+				emitted[fn.Name] = true
+			}
+		}
+
+		for {
+			needed := map[string]bool{}
+			for _, e := range entries {
+				if fn, ok := e.(FnEntry); ok {
+					for _, callee := range fn.Calls {
+						if !emitted[callee] && !needed[callee] {
+							needed[callee] = true
+						}
+					}
+				}
+			}
+
+			added := 0
+			for callee := range needed {
+				if _, exists := funcPositions[callee]; exists {
+					fn := FnEntry{Name: callee}
+					if c, ok := funcCalls[callee]; ok {
+						fn.Calls = c
+					}
+					if p, ok := funcPositions[callee]; ok {
+						fn.SourceFile = p.File
+						fn.SourceLine = p.Line
+					}
+					entries = append(entries, fn)
+					emitted[callee] = true
+					added++
+				}
+			}
+			if added == 0 {
+				break
+			}
+		}
+	}
+
 	return &AidFile{
 		Header:  header,
 		Entries: entries,

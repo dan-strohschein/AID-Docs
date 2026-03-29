@@ -1,0 +1,18 @@
+# Binaries
+/aid-gen-l2
+/aid-parse
+/aid-validate
+/aid-discover
+/aid-manifest-gen
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# OS
+.DS_Store

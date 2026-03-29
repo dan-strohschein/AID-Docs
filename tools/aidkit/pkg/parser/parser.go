@@ -37,6 +37,8 @@ var annotationKinds = map[string]bool{
 	"antipattern":  true, // Accept singular form too
 	"decision":     true,
 	"note":         true,
+	"error_map":    true, // Error taxonomy — classification, metrics, caller behavior
+	"lock":         true, // Concurrency lock documentation — kind, protects, ordering
 }
 
 // Manifest marker

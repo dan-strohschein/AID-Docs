@@ -622,3 +622,119 @@ func TestParseMultipleAnnotations(t *testing.T) {
 		t.Errorf("annotation 1 kind = %q", f.Annotations[1].Kind)
 	}
 }
+
+func TestParseErrorMap(t *testing.T) {
+	input := `@module test/mod
+@lang go
+@version 1.0.0
+@aid_version 0.1
+
+---
+
+@error_map sample_rejection
+@purpose Documents all sample rejection paths
+@entries
+  ErrOutOfOrder — timestamp before series max | retriable | out_of_order_total | silently drops [src: head.go:686]
+  ErrTooOld — outside OOO window | fatal_for_batch | too_old_total | breaks loop [src: head.go:681]
+`
+	f, warns, err := ParseString(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range warns {
+		t.Logf("warning: %s", w)
+	}
+	if len(f.Annotations) != 1 {
+		t.Fatalf("annotations = %d, want 1", len(f.Annotations))
+	}
+	a := f.Annotations[0]
+	if a.Kind != "error_map" {
+		t.Errorf("kind = %q, want %q", a.Kind, "error_map")
+	}
+	if a.Name != "sample_rejection" {
+		t.Errorf("name = %q, want %q", a.Name, "sample_rejection")
+	}
+	if purpose, ok := a.Fields["purpose"]; !ok || purpose.InlineValue != "Documents all sample rejection paths" {
+		t.Errorf("purpose = %v", a.Fields["purpose"])
+	}
+	entries, ok := a.Fields["entries"]
+	if !ok {
+		t.Fatal("missing entries field")
+	}
+	if len(entries.Lines) != 2 {
+		t.Fatalf("entries lines = %d, want 2", len(entries.Lines))
+	}
+	if !strings.Contains(entries.Lines[0], "ErrOutOfOrder") {
+		t.Errorf("entries line 0 = %q", entries.Lines[0])
+	}
+	if !strings.Contains(entries.Lines[1], "ErrTooOld") {
+		t.Errorf("entries line 1 = %q", entries.Lines[1])
+	}
+	// Check source refs extracted from multi-line entries
+	if len(entries.SourceRefs) != 2 {
+		t.Errorf("source refs = %d, want 2", len(entries.SourceRefs))
+	}
+	if len(warns) > 0 {
+		t.Errorf("unexpected warnings: %v", warns)
+	}
+}
+
+func TestParseLock(t *testing.T) {
+	input := `@module test/mod
+@lang go
+@version 1.0.0
+@aid_version 0.1
+
+---
+
+@lock headMu
+@kind sync.Mutex
+@purpose Serializes all head-append operations
+@protects head.minTime, head.maxTime, head.chunks
+@acquired_by Appender.Append, Appender.Commit
+@ordering headMu -> chunkMu (never reversed)
+@deadlock_avoidance Always acquire headMu before chunkMu
+@source_file head.go
+@source_line 42
+`
+	f, warns, err := ParseString(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range warns {
+		t.Logf("warning: %s", w)
+	}
+	if len(f.Annotations) != 1 {
+		t.Fatalf("annotations = %d, want 1", len(f.Annotations))
+	}
+	a := f.Annotations[0]
+	if a.Kind != "lock" {
+		t.Errorf("kind = %q, want %q", a.Kind, "lock")
+	}
+	if a.Name != "headMu" {
+		t.Errorf("name = %q, want %q", a.Name, "headMu")
+	}
+	checks := map[string]string{
+		"kind":               "sync.Mutex",
+		"purpose":            "Serializes all head-append operations",
+		"protects":           "head.minTime, head.maxTime, head.chunks",
+		"acquired_by":        "Appender.Append, Appender.Commit",
+		"ordering":           "headMu -> chunkMu (never reversed)",
+		"deadlock_avoidance": "Always acquire headMu before chunkMu",
+		"source_file":        "head.go",
+		"source_line":        "42",
+	}
+	for fieldName, want := range checks {
+		field, ok := a.Fields[fieldName]
+		if !ok {
+			t.Errorf("missing field %q", fieldName)
+			continue
+		}
+		if field.InlineValue != want {
+			t.Errorf("field %q = %q, want %q", fieldName, field.InlineValue, want)
+		}
+	}
+	if len(warns) > 0 {
+		t.Errorf("unexpected warnings: %v", warns)
+	}
+}

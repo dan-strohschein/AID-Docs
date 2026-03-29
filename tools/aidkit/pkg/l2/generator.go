@@ -63,8 +63,45 @@ Read the L1 AID to understand the API surface, then read the KEY source files. P
 3. **@invariants with [src:] references** — constraints that always hold
 4. **@antipatterns with [src:] references** — common mistakes to avoid
 5. **@pre/@post with [src:] references** — preconditions and postconditions
+6. **@error_map blocks** — if the module defines error sentinel values or has complex error handling, document the error taxonomy (see format below)
+7. **@lock blocks** — if the module uses mutexes, RWMutexes, channels as semaphores, or atomic operations for concurrency control, document each lock (see format below)
 
 For EVERY semantic claim, include a [src: relative/path:LINE] or [src: relative/path:START-END] reference.
+
+### @error_map format
+
+Use when a module defines error sentinel values (e.g., ErrOutOfOrder, ErrNotFound) and callers handle them differently. Each entry documents one error path.
+
+` + "```" + `
+@error_map <name>
+@purpose <what this error group covers>
+@entries
+  <ErrorName> — <when it occurs> | <classification> | <metric> | <caller_behavior> [src: file:LINE]
+  <ErrorName> — <when it occurs> | <classification> | <metric> | <caller_behavior> [src: file:LINE]
+` + "```" + `
+
+Classification values: retriable, fatal, fatal_for_batch, silent_drop, logged_only
+If no metric is associated, use "none". If caller behavior varies, describe the most common path.
+
+### @lock format
+
+Use when a module contains sync.Mutex, sync.RWMutex, channel semaphores, or atomic-based locks.
+
+` + "```" + `
+@lock <LockName>
+@kind <sync.Mutex | sync.RWMutex | chan struct{} | atomic | sync.Cond>
+@purpose <what data/invariant this lock protects>
+@protects <specific fields or state guarded>
+@acquired_by [<Function1>, <Function2>]
+@ordering <lock ordering constraints, e.g., "acquire AFTER BundleOperationLock, BEFORE rotationLocks">
+@deadlock_avoidance <strategy used, e.g., "released before disk I/O", "sorted acquisition order">
+@source_file <relative/path>
+@source_line <line number>
+` + "```" + `
+
+Only document locks that are architecturally significant — skip trivial internal mutexes on small helper structs.
+
+### Output format
 
 Start the output with:
 ` + "```" + `
