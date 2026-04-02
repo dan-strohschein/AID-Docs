@@ -1,0 +1,125 @@
+@project WebStore
+@lang go
+@aid_version 0.2
+
+@layers
+  cmd — CLI entry points (server, migrate, seed)
+  server — HTTP handlers, middleware, routing
+  service — Business logic orchestration
+  repository — Data access (PostgreSQL, Redis)
+  domain — Pure types, validation, business rules
+
+@boundaries
+  domain -> repository: FORBIDDEN
+  domain -> service: FORBIDDEN
+  domain -> server: FORBIDDEN
+  repository -> service: FORBIDDEN
+  repository -> server: FORBIDDEN
+  service -> server: FORBIDDEN
+
+@patterns
+  error_handling: Wrap with fmt.Errorf("[layer]: %w", err) at boundaries
+  dependency_injection: Constructor injection via New*() functions
+  concurrency: Context-based cancellation, no raw goroutines in handlers
+  testing: Table-driven tests, repository mocked via interface
+
+@owners
+  server/*: @platform-team
+  service/*: @backend-team
+  repository/*: @data-team
+
+---
+
+@cross_cutting auth_flow
+@purpose JWT-based authentication for all API endpoints
+@modules [server/middleware, server/auth, domain/user, repository/user]
+@flow
+  1. Request arrives at server/middleware.Auth
+  2. Extract Bearer token from Authorization header
+  3. Validate and decode via server/auth.ValidateToken
+  4. Load user from repository/user.GetByID
+  5. Attach domain/user.User to request context
+@errors
+  server/auth.InvalidTokenError — malformed or expired JWT
+  server/auth.ForbiddenError — valid token, insufficient role
+@antipatterns
+  - Don't check auth in handlers. AuthMiddleware handles it.
+  - Don't pass user as parameter. Read from context.
+@config
+  JWT_SECRET: str — HMAC signing key. Required. Sensitive.
+  JWT_EXPIRY: Duration — Token lifetime. Default 24h.
+
+---
+
+@cross_cutting error_propagation
+@purpose How errors flow from repository to HTTP responses
+@modules [domain, repository, service, server]
+@flow
+  1. Domain defines typed errors (NotFoundError, ValidationError, ConflictError)
+  2. Repository wraps DB errors: fmt.Errorf("repo: %w", err)
+  3. Service propagates domain errors, wraps repository errors
+  4. Server maps error types to HTTP status via server/errors.MapToHTTP
+@patterns
+  wrap_at_boundary: fmt.Errorf("[layer]: [context]: %w", err)
+  never_log_and_return: Either log OR return, not both
+
+---
+
+@convention error_wrapping
+@purpose Error wrapping at layer boundaries
+@rule Wrap with fmt.Errorf("[layer]: [op]: %w", err) at every layer crossing
+@rule Never wrap within the same layer
+@rule Use errors.Is() and errors.As() for matching, never type assertion
+@rule Domain errors are never wrapped — they surface unchanged to the handler
+@example
+  user, err := s.repo.GetByID(ctx, id)
+  if err != nil {
+    return nil, fmt.Errorf("service: get user: %w", err)
+  }
+
+---
+
+@convention naming
+@purpose Project naming conventions
+@rule Types: PascalCase
+@rule Handlers: Handle{Resource}{Action} (e.g., HandleUserCreate)
+@rule Service methods: {Action}{Resource} (e.g., CreateUser, GetOrder)
+@rule Repository methods: {Action} (e.g., GetByID, Create, Update, Delete)
+@rule Files: snake_case.go
+@rule Packages: single lowercase word
+
+---
+
+@convention testing
+@purpose Testing patterns
+@rule Table-driven tests with t.Run() subtests
+@rule Repositories mocked via interface, mocks in internal/mocks/
+@rule Integration tests use testcontainers for PostgreSQL
+@rule Test files in same package (not _test package)
+
+---
+
+@lifecycle startup
+@purpose Application initialization sequence
+@steps
+  1. config.Load() — parse config.yaml + env vars
+  2. logging.Init(config.LogLevel) — structured slog setup
+  3. repository.Connect(config.DatabaseURL) — create connection pool
+  4. repository.Migrate() — apply pending migrations
+  5. cache.Connect(config.RedisURL) — connect to Redis
+  6. service.New(repo, cache) — wire up service layer
+  7. server.New(svc, config.Port) — create HTTP server
+  8. server.Start() — begin accepting connections
+@shutdown_order reverse
+@timeout 30s
+
+---
+
+@decision no_orm
+@purpose Why we use raw SQL instead of an ORM
+@context Go ORMs (GORM, ent) add abstraction over PostgreSQL
+@chosen Raw SQL via pgx with sqlc for type-safe query generation
+@rejected GORM (implicit behavior, N+1 queries hidden), ent (code generation complexity)
+@rationale Raw SQL gives full control over query plans. sqlc provides type safety at
+  compile time without runtime reflection. ORM abstractions hide performance
+  characteristics that matter for our query patterns.

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/dan-strohschein/aidkit/pkg/parser"
@@ -12,6 +13,10 @@ import (
 
 // BuildGeneratorPrompt constructs the prompt for a Layer 2 generator agent.
 // The agent reads the L1 AID + source code and produces source-linked semantic docs.
+//
+// Source file selection is guided by L1 metadata: only files containing documented
+// functions/types (via @source_file) and their callees (via @calls) are listed.
+// This typically reduces the file set by 40-60% compared to listing all source files.
 func BuildGeneratorPrompt(l1Aid *parser.AidFile, sourceDir string, depAids []*parser.AidFile) (string, error) {
 	var b strings.Builder
 
@@ -39,53 +44,174 @@ func BuildGeneratorPrompt(l1Aid *parser.AidFile, sourceDir string, depAids []*pa
 		}
 	}
 
-	// Source file listing
+	// Source file listing — guided by L1 metadata
 	b.WriteString("## Source files to read\n\n")
 	b.WriteString(fmt.Sprintf("Source directory: %s\n\n", sourceDir))
-	files, _ := listSourceFiles(sourceDir)
+
+	files := extractRelevantFiles(l1Aid)
+	if len(files) == 0 {
+		// Fallback: L1 has no @source_file fields (pre-extraction L1)
+		files, _ = listSourceFiles(sourceDir)
+		b.WriteString("(All source files listed — L1 has no @source_file metadata)\n\n")
+	} else {
+		b.WriteString("(Selected by L1 analysis — contains all documented functions and their callees)\n\n")
+	}
 	for _, f := range files {
 		b.WriteString(fmt.Sprintf("- %s\n", f))
 	}
 	b.WriteString("\n")
 
-	// Instructions
-	b.WriteString(generatorInstructions)
+	// Instructions — conditionally assembled
+	b.WriteString(coreInstructions)
+
+	if hasErrorFields(l1Aid) {
+		b.WriteString(errorMapInstructions)
+	}
+	if detectConcurrencyPrimitives(sourceDir, files) {
+		b.WriteString(lockInstructions)
+	}
+
+	b.WriteString(outputFormatInstructions)
 
 	return b.String(), nil
 }
 
-const generatorInstructions = `## Instructions
+// extractRelevantFiles analyzes L1 AID entries to determine which source files
+// the generator actually needs to read. Uses @source_file for direct references
+// and @calls to include callee files.
+func extractRelevantFiles(l1Aid *parser.AidFile) []string {
+	fileSet := map[string]bool{}
 
-Read the L1 AID to understand the API surface, then read the KEY source files. Produce a Layer 2 AID file that adds:
+	// Build a name → source_file lookup for resolving callees
+	nameToFile := map[string]string{}
+	for _, e := range l1Aid.Entries {
+		if sf, ok := e.Fields["source_file"]; ok && sf.InlineValue != "" {
+			fileSet[sf.InlineValue] = true
+			nameToFile[e.Name] = sf.InlineValue
+			// Also index by short name (without type prefix) for method resolution
+			if idx := strings.LastIndex(e.Name, "."); idx >= 0 {
+				nameToFile[e.Name[idx+1:]] = sf.InlineValue
+			}
+		}
+	}
 
-1. **@workflow blocks** — document major data flows with numbered steps
-2. **Enhanced @purpose** — explain WHY, not just WHAT
-3. **@invariants with [src:] references** — constraints that always hold
-4. **@antipatterns with [src:] references** — common mistakes to avoid
-5. **@pre/@post with [src:] references** — preconditions and postconditions
-6. **@error_map blocks** — if the module defines error sentinel values or has complex error handling, document the error taxonomy (see format below)
-7. **@lock blocks** — if the module uses mutexes, RWMutexes, channels as semaphores, or atomic operations for concurrency control, document each lock (see format below)
+	// Resolve callees to their source files
+	for _, e := range l1Aid.Entries {
+		if calls, ok := e.Fields["calls"]; ok {
+			callList := parseCallsList(calls.InlineValue)
+			for _, callee := range callList {
+				if f, ok := nameToFile[callee]; ok {
+					fileSet[f] = true
+				}
+			}
+		}
+	}
+
+	// Convert to sorted slice for deterministic output
+	var files []string
+	for f := range fileSet {
+		files = append(files, f)
+	}
+	sort.Strings(files)
+	return files
+}
+
+// parseCallsList splits a @calls value like "Validate, store.Push, json.Marshal"
+// into individual function names.
+func parseCallsList(callsValue string) []string {
+	callsValue = strings.TrimPrefix(callsValue, "[")
+	callsValue = strings.TrimSuffix(callsValue, "]")
+	parts := strings.Split(callsValue, ",")
+	var result []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p != "" {
+			result = append(result, p)
+		}
+	}
+	return result
+}
+
+// hasErrorFields checks if any L1 entry has an @errors field.
+func hasErrorFields(l1Aid *parser.AidFile) bool {
+	for _, e := range l1Aid.Entries {
+		if _, ok := e.Fields["errors"]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+// detectConcurrencyPrimitives scans the relevant source files for sync primitives.
+func detectConcurrencyPrimitives(sourceDir string, files []string) bool {
+	patterns := []string{"sync.Mutex", "sync.RWMutex", "chan struct{}", "atomic."}
+	for _, f := range files {
+		fullPath := filepath.Join(sourceDir, f)
+		data, err := os.ReadFile(fullPath)
+		if err != nil {
+			continue
+		}
+		content := string(data)
+		for _, pat := range patterns {
+			if strings.Contains(content, pat) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// coreInstructions is always included in the generator prompt.
+const coreInstructions = `## Instructions
+
+Read ONLY the source files listed above. For each @fn entry in the L1 AID, its source is at the @source_file and @source_line indicated. Focus on: (1) function bodies, (2) type definitions, (3) error sentinels. Do NOT read CLAUDE.md, README.md, or test files. If you discover a function calls into a file not listed, you may read it.
+
+Produce an enriched AID file that **preserves ALL L1 content** and adds L2 semantic annotations.
+
+### CRITICAL: Preserve L1 Content
+
+Your output MUST include every @fn, @type, @trait, and @const entry from the L1 AID above — with their @sig, @params, @returns, @calls, @source_file, and @source_line fields intact. Do NOT drop or rewrite L1 entries.
+
+For each L1 entry, you MAY enhance:
+- The @purpose field (explain WHY, not just WHAT)
+- Add @pre/@post conditions
+- Add @errors details
+- Add @thread_safety notes
+
+But you MUST keep: @fn name, @sig, @params, @calls, @source_file, @source_line unchanged.
+
+### Add L2 Blocks
+
+After the preserved L1 entries, add:
+
+1. **@workflow blocks** — major data flows with numbered steps
+2. **@invariants with [src:] references** — constraints that always hold
+3. **@antipatterns with [src:] references** — common mistakes to avoid
 
 For EVERY semantic claim, include a [src: relative/path:LINE] or [src: relative/path:START-END] reference.
 
-### @error_map format
+`
 
-Use when a module defines error sentinel values (e.g., ErrOutOfOrder, ErrNotFound) and callers handle them differently. Each entry documents one error path.
+// errorMapInstructions is included only when L1 entries have @errors fields.
+const errorMapInstructions = `### @error_map format
+
+If the module defines error sentinel values (e.g., ErrOutOfOrder, ErrNotFound), add @error_map blocks:
 
 ` + "```" + `
 @error_map <name>
 @purpose <what this error group covers>
 @entries
   <ErrorName> — <when it occurs> | <classification> | <metric> | <caller_behavior> [src: file:LINE]
-  <ErrorName> — <when it occurs> | <classification> | <metric> | <caller_behavior> [src: file:LINE]
 ` + "```" + `
 
 Classification values: retriable, fatal, fatal_for_batch, silent_drop, logged_only
-If no metric is associated, use "none". If caller behavior varies, describe the most common path.
 
-### @lock format
+`
 
-Use when a module contains sync.Mutex, sync.RWMutex, channel semaphores, or atomic-based locks.
+// lockInstructions is included only when source files contain sync primitives.
+const lockInstructions = `### @lock format
+
+Document architecturally significant locks (skip trivial internal mutexes):
 
 ` + "```" + `
 @lock <LockName>
@@ -93,17 +219,16 @@ Use when a module contains sync.Mutex, sync.RWMutex, channel semaphores, or atom
 @purpose <what data/invariant this lock protects>
 @protects <specific fields or state guarded>
 @acquired_by [<Function1>, <Function2>]
-@ordering <lock ordering constraints, e.g., "acquire AFTER BundleOperationLock, BEFORE rotationLocks">
-@deadlock_avoidance <strategy used, e.g., "released before disk I/O", "sorted acquisition order">
+@ordering <lock ordering constraints>
 @source_file <relative/path>
 @source_line <line number>
 ` + "```" + `
 
-Only document locks that are architecturally significant — skip trivial internal mutexes on small helper structs.
+`
 
-### Output format
+// outputFormatInstructions defines the output structure. Always included.
+const outputFormatInstructions = `### Output format
 
-Start the output with:
 ` + "```" + `
 @module <module-name>
 @lang <language>
@@ -111,11 +236,13 @@ Start the output with:
 @aid_status draft
 @aid_generated_by layer2-generator
 @depends [<dependency-packages>]
+---
+[ALL L1 entries preserved, with L2 enhancements on existing entries]
+---
+[NEW @workflow, @invariants, @antipatterns blocks]
 ` + "```" + `
 
-Focus on the MOST IMPORTANT architectural knowledge — the stuff that would take hours to figure out from reading code. Don't document trivial getters.
-
-DO NOT read CLAUDE.md or README.md.
+Focus on the MOST IMPORTANT architectural knowledge — the stuff that would take hours to figure out from reading code. Don't document trivial getters. Preserve every L1 entry even if you have nothing to add.
 `
 
 func readAidAsText(f *parser.AidFile) (string, error) {

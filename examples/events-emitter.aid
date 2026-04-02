@@ -11,8 +11,9 @@
 @kind class
 @purpose Central hub for registering listeners and emitting events
 @generic_params E: Event
+@fields_visibility partial
 @fields
-  (internal) — map of event names to ordered listener lists
+  listener_count: int — total number of registered listeners across all events
 @invariants
   - listeners for a given event are invoked in registration order
   - removing a listener during emission is safe — takes effect after current emission completes

@@ -51,10 +51,13 @@ func cmdGenerate(args []string) {
 	l1Path := fs.String("l1", "", "Path to Layer 1 .aid file (required)")
 	sourceDir := fs.String("source", "", "Path to source code directory (required)")
 	depsStr := fs.String("deps", "", "Comma-separated paths to dependency .aid files")
+	oldL1Path := fs.String("old-l1", "", "Path to previous L1 .aid file (enables incremental generation)")
+	existingL2Path := fs.String("existing-l2", "", "Path to existing L2 .aid file (for incremental generation)")
 	fs.Parse(args)
 
 	if *l1Path == "" || *sourceDir == "" {
 		fmt.Fprintf(os.Stderr, "Usage: aid-gen-l2 generate --l1 file.aid --source ./src/pkg/ [--deps a.aid,b.aid]\n")
+		fmt.Fprintf(os.Stderr, "       aid-gen-l2 generate --l1 new.aid --old-l1 old.aid --existing-l2 pkg-l2.aid --source ./src/pkg/\n")
 		os.Exit(1)
 	}
 
@@ -77,6 +80,39 @@ func cmdGenerate(args []string) {
 		}
 	}
 
+	// Incremental mode: diff old L1 vs new L1, generate only for changes
+	if *oldL1Path != "" && *existingL2Path != "" {
+		oldL1, _, err := parser.ParseFile(*oldL1Path)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error parsing old L1 AID: %v\n", err)
+			os.Exit(1)
+		}
+		existingL2, _, err := parser.ParseFile(*existingL2Path)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error parsing existing L2 AID: %v\n", err)
+			os.Exit(1)
+		}
+
+		diff := l2.DiffL1Aids(oldL1, l1)
+
+		if len(diff.New) == 0 && len(diff.Modified) == 0 && len(diff.Removed) == 0 {
+			fmt.Fprintln(os.Stderr, "No L1 changes detected. L2 is up to date.")
+			return
+		}
+
+		fmt.Fprintf(os.Stderr, "L1 diff: %d new, %d modified, %d unchanged, %d removed\n",
+			len(diff.New), len(diff.Modified), len(diff.Unchanged), len(diff.Removed))
+
+		prompt, err := l2.BuildIncrementalGeneratorPrompt(l1, existingL2, diff, *sourceDir, depAids)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Error building incremental prompt: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Print(prompt)
+		return
+	}
+
+	// Full generation mode
 	prompt, err := l2.BuildGeneratorPrompt(l1, *sourceDir, depAids)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error building prompt: %v\n", err)

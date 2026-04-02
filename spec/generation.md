@@ -21,6 +21,14 @@ Parse source code and extract everything that has a direct structural mapping to
 - `@returns` (type only, no semantic description)
 - `@deprecated` (from language-level deprecation markers)
 - `@since` (from version control history, if available)
+- `@calls` (from AST analysis of function bodies)
+- `@source_file` and `@source_line` (exact source location)
+- `@tested` (by checking if test files reference the function)
+- `@test_hint` (by matching test function name patterns like `TestFn` or `test_fn`)
+- `@test_framework` (inferred from test file patterns: `_test.go`, `test_*.py`, `*.test.ts`)
+- `@env` — partial (by finding `os.Getenv()`, `os.environ`, `process.env` calls)
+- `@global_state` — partial (from package-level `var` declarations in Go, module-level vars in Python)
+- `@reads` / `@writes` — partial (from AST field access analysis, requires type resolution)
 
 **What it cannot produce:**
 - `@purpose` (requires understanding intent)
@@ -32,6 +40,11 @@ Parse source code and extract everything that has a direct structural mapping to
 - `@workflow` (requires understanding multi-step patterns)
 - `@antipatterns` (requires experience/tribal knowledge)
 - Constraint syntax (`Range`, `Must be`, `Must match`) — types give you the type, not the valid range
+- `@cross_cutting`, `@convention`, `@lifecycle` — project-level entries require architectural understanding
+- `@services` (requires knowing what a URL/connection connects to)
+- `@mock_strategy` (requires understanding test patterns)
+- `@layers`, `@boundaries`, `@patterns` — project-level architectural context
+- `@init_order` (requires understanding initialization dependencies)
 
 **Quality tier: Skeleton.** Useful as a starting point. Missing most of what makes AID valuable.
 
@@ -41,16 +54,23 @@ An AI agent reads the mechanical skeleton alongside the source code, docstrings,
 
 **What it adds:**
 - `@purpose` for every entry (synthesized from docstrings, naming, context)
-- `@errors` (traced from source code `raise`/`throw`/`return error` paths)
+- `@errors` with provenance annotations (`[origin]`, `[from: FnName]`) (traced from source code)
 - `@params` constraints (inferred from validation code, docstrings, tests)
 - `@pre` / `@post` (inferred from assertions, documentation, usage patterns)
 - `@effects` (classified from I/O calls in the implementation)
 - `@invariants` (inferred from constructors, validation, and usage)
 - `@thread_safety` (inferred from locking, shared state, documentation)
 - `@complexity` (inferred from algorithm structure)
-- `@related` (inferred from call graphs and type relationships)
+- `@related` with typed relationships (inferred from call graphs and type relationships)
 - `@workflow` blocks (synthesized from README examples, test patterns, and API shape)
 - `@antipatterns` (inferred from common mistakes in issues, tests, and documentation)
+- `@env` descriptions and constraints (adds context to L1-extracted variable names)
+- `@services` (infers what external services URL patterns connect to)
+- `@mock_strategy` (inferred from test file analysis)
+- `@reads` / `@writes` verification (confirms and fills gaps in L1's partial extraction)
+- `@cross_cutting` entries (identifies cross-module patterns from call graphs)
+- `@convention` entries (infers conventions from statistical code analysis)
+- `@lifecycle` entries (infers from init functions and startup patterns)
 
 **What it struggles with:**
 - Constraints not enforced in code (API rate limits, external system requirements)

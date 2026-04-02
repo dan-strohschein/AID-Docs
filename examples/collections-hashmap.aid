@@ -11,8 +11,10 @@
 @kind struct
 @purpose Key-value map using hash-based indexing for fast lookups
 @generic_params K: Hash + Eq, V
+@fields_visibility partial
 @fields
-  (internal) — hash table with key-value pairs
+  count: int — number of stored entries
+  capacity: int — current bucket allocation
 @invariants
   - len is always >= 0
   - capacity is always >= len

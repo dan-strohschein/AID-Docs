@@ -11,11 +11,26 @@
 | `@module` | Yes | string | Fully qualified module name |
 | `@lang` | Yes | string | Source language identifier |
 | `@version` | Yes | semver | Library version this AID file describes |
-| `@stability` | No | enum | `experimental`, `unstable`, `stable`, `deprecated`. Default: `stable` |
+| `@stability` | No | enum | `unknown`, `experimental`, `unstable`, `stable`, `deprecated`. Default: `unknown` |
 | `@purpose` | Yes | string | One-line description. Max 120 chars. |
-| `@deps` | No | list | Module dependencies |
+| `@depends` | No | list | Modules/packages this module depends on (for selective AID loading) |
 | `@source` | No | URL | Link to source code or docs |
+| `@code_version` | No | string | Git commit hash this AID describes. Format: `git:HASH` |
+| `@aid_status` | No | enum | `draft`, `reviewed`, `approved`, `stale`. Default: `draft` |
+| `@aid_generated_by` | No | string | Agent role that produced this AID |
+| `@aid_reviewed_by` | No | string | Agent role that verified this AID |
 | `@aid_version` | No | semver | AID spec version. Default: latest |
+| `@test_framework` | No | string | Test framework name (e.g., `go test`, `pytest`, `jest`) |
+| `@test_cmd` | No | string | Command to run this module's tests |
+| `@test_fixtures` | No | string | Path to test fixtures/data relative to module root |
+| `@mock_strategy` | No | string | How dependencies are mocked |
+| `@env` | No | block | Environment variables this module reads. Uses constraint syntax. Mark secrets with `Sensitive.` |
+| `@services` | No | block | External services. Format: `ServiceName: ENV_VAR — purpose` |
+| `@config_files` | No | block | Config files. Format: `filename — description` |
+| `@init_order` | No | int | Initialization order. Lower numbers init first. |
+| `@init_fn` | No | string | Function that initializes this module |
+| `@shutdown_fn` | No | string | Function that shuts down this module |
+| `@global_state` | No | block | Module-level mutable state. Format: `name: Type — description` |
 
 ---
 
@@ -24,6 +39,7 @@
 | Field | Required | Type | Description |
 |-------|----------|------|-------------|
 | `@fn` | Yes | string | Function or method name. Methods use dot notation: `Type.method` |
+| `@visibility` | No | enum | `public`, `internal`, `protected`, `private`. Default: `public`. |
 | `@purpose` | Yes | string | One-line description. Max 120 chars. |
 | `@sig` | Yes | signature | Full type signature (see signature syntax) |
 | `@params` | Conditional | block | Parameter descriptions. Required if function has params. |
@@ -31,12 +47,19 @@
 | `@errors` | Conditional | block | Error types and conditions. Required if function can error. |
 | `@pre` | No | string/block | Preconditions. Use `None` to explicitly state there are none. |
 | `@post` | No | string/block | Postconditions guaranteed after successful return |
-| `@effects` | No | list | Side effect categories: `Net`, `Fs`, `Io`, `Env`, `Time`, `Random`, `Db`, `Process`, `Callback` |
-| `@thread_safety` | No | string | Concurrency safety description |
+| `@effects` | No | list | Side effect categories: `Net`, `Fs`, `Io`, `Env`, `Time`, `Random`, `Db`, `Process`, `Gpu`, `Config`, `Callback` |
+| `@thread_safety` | No | string | Structured keyword first (`safe`, `immutable`, `channel-based`, `requires-sync`, `not-safe`), optional elaboration after. |
 | `@complexity` | No | string | Time and/or space complexity |
 | `@since` | No | semver | Version when introduced |
 | `@deprecated` | No | string | Deprecation notice with replacement |
-| `@related` | No | list | Names of related entries. Bare names for same module, `module/path.Name` for cross-module. |
+| `@related` | No | block | Typed block. Each line: `type: name [, name]`. Types: `calls`, `produces`, `consumes`, `sibling`, `wraps`, `inverse`, `replaces`. Untyped flat lists accepted as `sibling:` for backward compat. |
+| `@calls` | No | list | Functions this function calls internally. Populated by Layer 1 extractors from AST analysis. |
+| `@reads` | No | list | Fields this function reads. Format: `[Type.field, ...]` |
+| `@writes` | No | list | Fields this function writes. Format: `[Type.field, ...]` |
+| `@tested` | No | bool | Whether this function has test coverage. `true`/`false`. |
+| `@test_hint` | No | list | Test function names that exercise this function |
+| `@source_file` | No | string | Source file path relative to project root. Layer 1 field. |
+| `@source_line` | No | int | Line number in source file. Layer 1 field. |
 | `@platform` | No | block | Platform-specific behavior differences |
 | `@example` | No | block | Minimal usage example |
 
@@ -127,6 +150,7 @@ Bounds appear in two places:
 | `Db` | Database operations |
 | `Process` | Process spawning, signals |
 | `Gpu` | GPU computation |
+| `Config` | Reads configuration (env vars, config files) at runtime. Distinct from `Env` which covers process environment mutation. |
 | `Callback` | Effects depend on caller-provided function arguments. Cannot determine purity without inspecting inputs. |
 
 ---
@@ -136,9 +160,11 @@ Bounds appear in two places:
 | Field | Required | Type | Description |
 |-------|----------|------|-------------|
 | `@type` | Yes | string | Type name |
+| `@visibility` | No | enum | `public`, `internal`, `protected`, `private`. Default: `public`. |
 | `@kind` | Yes | enum | `struct`, `enum`, `union`, `class`, `alias`, `newtype` |
 | `@purpose` | Yes | string | One-line description. Max 120 chars. |
 | `@fields` | Conditional | block | Field descriptions. Required for struct/class. |
+| `@fields_visibility` | No | enum | `full` or `partial`. Signals if `@fields` lists all fields. Default: `full`. |
 | `@variants` | Conditional | block | Variant descriptions. Required for enum/union. |
 | `@invariants` | No | block | Properties that always hold for valid instances |
 | `@constructors` | No | string/block | How to create instances. `None` if factory-produced only. |
@@ -170,6 +196,7 @@ Bounds appear in two places:
 | Field | Required | Type | Description |
 |-------|----------|------|-------------|
 | `@trait` | Yes | string | Trait/interface name |
+| `@visibility` | No | enum | `public`, `internal`, `protected`, `private`. Default: `public`. |
 | `@purpose` | Yes | string | One-line description |
 | `@requires` | Yes | block | Method signatures implementors must provide |
 | `@provided` | No | block | Methods with default implementations |
@@ -184,8 +211,9 @@ Bounds appear in two places:
 | Field | Required | Type | Description |
 |-------|----------|------|-------------|
 | `@const` | Yes | string | Constant name |
+| `@visibility` | No | enum | `public`, `internal`, `protected`, `private`. Default: `public`. |
 | `@purpose` | Yes | string | One-line description |
-| `@type` | Yes | string | The constant's type |
+| `@value_type` | Yes | string | The constant's type. Named `@value_type` to avoid ambiguity with the `@type` entry keyword. |
 | `@value` | No | string | The constant's value |
 | `@since` | No | semver | Version introduced |
 
@@ -236,6 +264,55 @@ Bounds appear in two places:
 |-------|----------|------|-------------|
 | `@note` | Yes | string | Note name (descriptive identifier) |
 | `@purpose` | Yes | string | What this note communicates |
+
+---
+
+## Project file fields (`project.aid`)
+
+### Project header fields
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `@project` | Yes | string | Project name (same as manifest `@project`) |
+| `@lang` | Yes | string | Primary language |
+| `@aid_version` | No | semver | AID spec version |
+| `@layers` | No | block | Named architectural layers, ordered outermost to innermost. One layer per line: `name — description` |
+| `@boundaries` | No | block | Dependency rules. Format: `source -> target: ALLOWED\|FORBIDDEN [reason]` |
+| `@patterns` | No | block | Project-wide design patterns. Format: `pattern_name: description` |
+| `@owners` | No | block | Module ownership. Format: `module_glob: team/person` |
+
+### Cross-cutting concern fields (`@cross_cutting`)
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `@cross_cutting` | Yes | string | Concern name (snake_case) |
+| `@purpose` | Yes | string | One-line description |
+| `@modules` | Yes | list | Modules involved in this concern |
+| `@flow` | No | block | Numbered steps showing how the concern flows across modules |
+| `@errors` | No | block | Errors specific to this concern, with module-qualified names |
+| `@patterns` | No | block | Patterns specific to this concern |
+| `@antipatterns` | No | block | Mistakes to avoid |
+| `@config` | No | block | Configuration this concern depends on |
+
+### Convention fields (`@convention`)
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `@convention` | Yes | string | Convention name (snake_case) |
+| `@purpose` | Yes | string | One-line description |
+| `@rule` | Yes | string (repeatable) | Convention rules. Multiple `@rule` lines accumulate into a list. |
+| `@example` | No | block | Code example showing correct usage |
+| `@antipatterns` | No | block | Common violations to avoid |
+
+### Lifecycle fields (`@lifecycle`)
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `@lifecycle` | Yes | string | Lifecycle name (`startup`, `shutdown`, `migration`, or custom) |
+| `@purpose` | Yes | string | One-line description |
+| `@steps` | Yes | block | Numbered sequence (same syntax as `@workflow` steps) |
+| `@shutdown_order` | No | string | `reverse` or custom ordering description |
+| `@timeout` | No | string | Timeout for this lifecycle phase |
 
 ---
 

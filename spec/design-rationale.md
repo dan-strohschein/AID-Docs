@@ -373,3 +373,163 @@ The delta needs a reference point that is unambiguous, universal, and automatabl
 Semver (`@version`) was considered but rejected because library versions change infrequently while code changes constantly. An agent needs to know "has anything changed since the last time I read this?" — that's a commit-level question, not a release-level question.
 
 The format `git:SHORT_HASH` is explicit about the version control system, leaving room for future alternatives (e.g., `svn:REV`, `hg:NODE`) without ambiguity.
+
+---
+
+## v0.2 Additions
+
+## 35. Why `project.aid` instead of extending the manifest?
+
+The manifest indexes modules — it maps package names to AID files for selective loading. Adding architectural context (layers, boundaries, conventions, cross-cutting concerns) to the manifest conflates two purposes: indexing and architectural documentation.
+
+`project.aid` is a separate file because:
+- It contains entry types (`@cross_cutting`, `@convention`, `@lifecycle`) that don't fit the manifest's `@package` structure
+- Agents read it once for project orientation, then never again (unlike the manifest, which is consulted per-task)
+- It can exist even without a manifest (small projects don't need a manifest but still benefit from architectural context)
+
+## 36. Why remove `@deps` and standardize on `@depends`?
+
+`@deps` and `@depends` had overlapping semantics. `@deps` was "module dependencies" and `@depends` was "packages for selective AID loading" — effectively the same thing from an agent's perspective. Having two fields with near-identical names creates confusion for spec implementers and AID authors.
+
+`@depends` was chosen over `@deps` because it's more readable and already used in the manifest. The 4-character savings of `@deps` is not worth the ambiguity. `@deps` was removed entirely rather than deprecated — at v0.2 with no public ecosystem, there is no backward compatibility to preserve. Carrying a deprecated alias is unnecessary parser complexity.
+
+## 37. Why explicit `None` vs omission semantics?
+
+Consider `@pre` on a function:
+- `@pre None` — the author verified: this function has no preconditions
+- `@pre` omitted — preconditions are unknown or undocumented
+
+This distinction matters because an agent treats them differently. With `@pre None`, the agent can call the function freely. With `@pre` omitted, the agent should be cautious — there might be undocumented preconditions.
+
+This follows the AID design principle "Explicit Everything" — if it's not written, an agent must assume it's unknown. `None` is the explicit way to state "there are none."
+
+## 38. Why `@cross_cutting` entries?
+
+AID v0.1 documented modules in isolation. But real codebases have concerns that span many modules: authentication, error handling, observability. These patterns are invisible in per-module AID files.
+
+`@cross_cutting` is essentially a cross-module `@workflow`. The key difference:
+- `@workflow` is scoped to one module and references functions within that module
+- `@cross_cutting` lists `@modules` involved and references functions across module boundaries
+
+Without cross-cutting documentation, agents must discover auth flows, error strategies, and observability patterns by reading source code across multiple modules — exactly the token cost AID was designed to eliminate.
+
+## 39. Why `@convention` entries?
+
+When agents write new code, they need to match existing conventions: error wrapping patterns, naming styles, import ordering, logging approaches. These conventions are not derivable from individual function signatures — they're project-wide norms visible only after reading many files.
+
+`@convention` captures conventions as structured rules (`@rule` fields) rather than prose. The `@rule` field is repeatable (accumulating, like `@sig` on overloaded functions) so each convention is a list of crisp, actionable directives.
+
+Alternative considered: putting conventions in CLAUDE.md / project instructions. Rejected because conventions should travel with the code and be machine-parseable by any agent, not just Claude.
+
+## 40. Why `@lifecycle` entries?
+
+Applications (as opposed to libraries) have initialization and shutdown sequences that must be followed in specific order. Module A must be initialized before Module B. Shutdown must drain connections before closing the database.
+
+Without lifecycle documentation, agents adding new initialization steps don't know where in the sequence to insert them. BM3 showed that agents without architectural context reinvent rather than reuse — lifecycle ordering is a specific instance of this problem.
+
+## 41. Why `@calls` as a spec field?
+
+`@calls` was the highest-impact gap identified during Cartograph design. AID documented what functions accept and return, but not what they call internally. This prevented call graph construction — the most basic structural query.
+
+`@calls` is a Layer 1 field: extractors populate it mechanically from AST analysis by walking function bodies for call expressions. No AI inference needed. The token cost is modest (one line per function) and the value for graph queries is high.
+
+## 42. Why typed `@related`?
+
+v0.1's `@related` was a flat list with no type information. "Related" could mean calls, wraps, replaces, or is-a-sibling — semantically very different relationships. Typed `@related` adds a block form:
+
+```
+@related
+  calls: request
+  produces: Response
+  sibling: post, put, delete
+```
+
+The flat list remains valid for backward compatibility. Typed relationships are opt-in when the nature of the relationship matters for agent decision-making.
+
+## 43. Why error provenance annotations?
+
+`@errors` listed what errors a function could produce but not where they came from. An agent couldn't distinguish "this function originates NotFoundError" from "this function propagates NotFoundError from GetUser."
+
+Inline annotations (`[origin]`, `[from: FnName]`, `[caught: description]`) keep provenance co-located with the error entry, avoiding a separate field. They're zero extra lines — just additional text on existing error lines.
+
+## 44. Why test information fields?
+
+Agents write tests for almost every task. Without test guidance, they spend tokens:
+1. Finding the test directory
+2. Reading existing tests to learn patterns
+3. Identifying the test framework and assertion style
+4. Locating shared fixtures
+
+`@test_framework`, `@test_cmd`, and `@test_fixtures` on the module header eliminate steps 1-4 in a single read. `@tested` and `@test_hint` on function entries help agents find existing tests to use as patterns.
+
+## 45. Why `@env` and `@services`?
+
+`@effects [Net]` tells an agent "this function makes network calls" but not what endpoint, what authentication, or what environment variable configures it. When deploying, testing, or mocking, agents need to know the specific external dependencies.
+
+`@env` reuses the existing constraint syntax (`Required.`, `Default VALUE.`, `Sensitive.`), keeping the spec consistent. `Sensitive.` is a new constraint marker that tells agents not to log, print, or hardcode the value.
+
+## 46. Why `@reads` and `@writes`?
+
+"What code can modify User.email?" is a security-critical question. Without field access tracking, the only way to answer it is grepping source code. `@reads` and `@writes` make this queryable from AID.
+
+These fields are optional and recommended only for functions that touch fields of types with `@invariants` — the cases where knowing what accesses a field actually matters.
+
+## 47. Why `Config` as a separate effect from `Env`?
+
+`Env` originally covered all environment variable access. But there's a semantic difference between:
+- Reading configuration at startup: `os.Getenv("DATABASE_URL")` — pure input, no side effect after init
+- Modifying process environment: `os.Setenv("TZ", "UTC")` — mutation visible to other code
+
+`Config` captures the read-configuration pattern. `Env` is reserved for environment mutation. This distinction helps agents understand which effects are init-time-only vs runtime-mutable.
+
+## 48. Why structured `@thread_safety` vocabulary?
+
+v0.1's `@thread_safety` was a free-text string. "Safe" vs "Not safe" doesn't help an agent decide whether to add a mutex or channel. Compare with `@effects`, which has a closed vocabulary — agents can mechanically check effects without parsing prose.
+
+The vocabulary (`safe`, `immutable`, `channel-based`, `requires-sync`, `not-safe`) covers the decision space an agent faces when writing concurrent code. The structured keyword comes first for machine parsing; optional prose after `.` provides human context. This preserves backward compatibility — existing free-text values still parse, just without the structured benefit.
+
+## 49. Why `@visibility` field?
+
+AID primarily documents public APIs, and most entries are public by default. But languages with rich access control (C#, Java, Kotlin) distinguish `public`/`internal`/`protected`/`private`, and Go's `--internal` flag in `aid-gen-go` already documents unexported symbols.
+
+`@visibility` makes this explicit rather than relying on the convention "if it's in the AID file, it's public." Default is `public` — only non-public entries need to declare visibility. This supports the `--internal` use case where AID documents internal helpers for completeness.
+
+## 50. Why change `@stability` default to `unknown`?
+
+v0.1 defaulted to `stable`, which is the optimistic assumption. But AID's core principle is "Explicit Everything" — if it's not written, an agent must assume it's unknown. Defaulting to `stable` violates this: every AID file that forgets `@stability` implicitly claims stability.
+
+`unknown` follows the same conservative philosophy as `@aid_status` defaulting to `draft`. Omission means "not asserted," not "assumed stable."
+
+## 51. Why remove `@deps` entirely instead of deprecating?
+
+At v0.2 with no public ecosystem, carrying a deprecated alias is pure parser complexity with zero benefit. Every future parser implementation must handle both `@deps` and `@depends` forever. The spec explicitly allows breaking changes pre-1.0 (Section 14.1). Clean removal is the right choice.
+
+## 52. Why `@value_type` instead of `@type` in `@const` entries?
+
+`@type` as both an entry keyword (`@type Response`) and a field inside `@const` (`@type int`) creates context-dependent parsing — the same field name means different things depending on where it appears. AID's design principle is "No context-dependent parsing." A parser seeing `@type` should not need to check whether it's inside a `@const` block.
+
+`@value_type` eliminates the ambiguity. The name is slightly longer but completely unambiguous.
+
+## 53. Why `@fields_visibility` instead of `(internal)` convention?
+
+The `(internal)` convention was unparseable — an agent couldn't mechanically distinguish "has internal state" from "has no internal state." It was also the only place in the format using parenthetical syntax, breaking the `@field` prefix consistency.
+
+`@fields_visibility partial` is a proper field that parsers can handle. `full` (the default when omitted) means all fields are listed. `partial` means the type has additional undocumented internal fields.
+
+## 54. Why make typed `@related` the canonical form?
+
+Flat `@related` lists provide zero semantic value — knowing something is "related" without knowing *how* is barely better than nothing. Since v0.2 introduces the typed form, there's no reason to maintain two syntaxes that every consumer must handle.
+
+Untyped flat lists are still accepted for backward compatibility and silently treated as `sibling:` entries. But new AID files should always use typed relationships, and tooling should emit typed form.
+
+## 55. Why accumulating fields need explicit documentation?
+
+The parser spec said "Duplicate fields: last value wins." But `@sig` and `@rule` were documented as accumulating. A parser author following only Section 8 would build a parser that breaks overloaded signatures — a real bug.
+
+Accumulating fields are now explicitly listed in Section 8.6. The list is intentionally short (`@sig`, `@rule`) to minimize surprise. Any future accumulating field must be added to this list. The principle: fields overwrite by default, accumulation is the rare exception that must be declared.
+
+## 56. Why formalize error hierarchy (dot notation)?
+
+`@errors` used dot notation (`HttpError.DnsFailure`) implicitly, but never formally defined the relationship to `@type` entries with `@variants`. An agent couldn't mechanically verify that an error variant in `@errors` actually exists as a declared type.
+
+The formalization makes this relationship explicit: `ErrorType.Variant` in `@errors` must reference a declared `@type` with matching `@variants`. This enables the `aid-validate` tool to check error consistency — a real safety net against typos and stale error references.

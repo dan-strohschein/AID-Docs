@@ -1,0 +1,298 @@
+@module task/queue
+@lang go
+@version 1.4.0
+@stability stable
+@purpose Distributed task queue with retry, scheduling, and dead-letter support
+@depends [task/worker, task/store, encoding/json, time]
+@source https://github.com/example/taskqueue
+@code_version git:a3f8c21
+@aid_status reviewed
+@aid_version 0.2
+@test_framework go test
+@test_cmd go test ./internal/task/queue/...
+@test_fixtures testdata/
+@mock_strategy interfaces — TaskStore and Worker mocked via interface
+@env
+  QUEUE_REDIS_URL: str — Redis connection for queue backend. Required.
+  QUEUE_MAX_RETRIES: int — Global max retries. Default 3. Range [0, 10].
+  QUEUE_POLL_INTERVAL: Duration — Worker poll frequency. Default 1s.
+@services
+  Redis: QUEUE_REDIS_URL — task queue storage and pub/sub
+@init_order 4
+@init_fn Initialize
+@shutdown_fn Shutdown
+@global_state
+  defaultQueue: *Queue — singleton queue instance, created in Initialize
+
+---
+
+@fn Enqueue
+@purpose Add a task to the queue for async processing
+@sig (ctx: Context, task: Task) -> TaskID ! QueueError | SerializeError
+@params
+  ctx: Context for cancellation and tracing.
+  task: Task to enqueue.
+    .type: str — task type identifier. Required. Length [1, 255].
+    .payload: any — serializable payload. Must be JSON-encodable.
+    .priority: int — higher runs first. Default 0. Range [-10, 10].
+    .delay: Duration? — delay before first execution attempt. Default None.
+    .max_retries: int? — override global QUEUE_MAX_RETRIES. Range [0, 100].
+@returns TaskID (UUID string) for tracking
+@errors
+  QueueError.ConnectionLost — Redis connection failed [from: store.Push]
+  QueueError.QueueFull — queue at capacity limit [origin]
+  SerializeError — payload cannot be serialized to JSON [from: encoding/json.Marshal]
+@pre Queue must be initialized (Initialize called)
+@post Task is durably stored in Redis. Will be delivered at least once.
+@effects [Db, Net]
+@calls store.Push, json.Marshal, uuid.New
+@related
+  produces: TaskID
+  sibling: EnqueueBatch
+  inverse: Cancel
+@reads None
+@writes None
+@tested true
+@test_hint TestEnqueue_Success, TestEnqueue_QueueFull, TestEnqueue_InvalidPayload
+@thread_safety Safe. Queue uses connection pool with per-call connections.
+@complexity O(1)
+@since 1.0.0
+@example
+  id, err := queue.Enqueue(ctx, Task{
+    Type:    "send_email",
+    Payload: EmailPayload{To: "user@example.com", Subject: "Welcome"},
+  })
+
+---
+
+@fn EnqueueBatch
+@purpose Add multiple tasks atomically
+@sig (ctx: Context, tasks: [Task]) -> [TaskID] ! QueueError | SerializeError
+@params
+  ctx: Context for cancellation.
+  tasks: Tasks to enqueue. Length [1, 1000].
+@returns List of TaskIDs in same order as input
+@errors
+  QueueError.ConnectionLost — Redis connection failed [from: store.PushBatch]
+  QueueError.QueueFull — queue at capacity [origin]
+  SerializeError — one or more payloads invalid [from: encoding/json.Marshal]
+@pre Queue must be initialized.
+@post All tasks stored atomically — all succeed or all fail.
+@effects [Db, Net]
+@calls store.PushBatch, json.Marshal
+@tested true
+@test_hint TestEnqueueBatch_Atomic, TestEnqueueBatch_PartialFail
+@thread_safety Safe.
+@complexity O(n) where n = len(tasks)
+@since 1.2.0
+@related
+  sibling: Enqueue
+
+---
+
+@fn Cancel
+@purpose Cancel a pending task by ID
+@sig (ctx: Context, id: TaskID) -> bool ! QueueError
+@params
+  ctx: Context for cancellation.
+  id: Task ID returned by Enqueue.
+@returns true if task was cancelled, false if already processed or not found
+@errors
+  QueueError.ConnectionLost — Redis connection failed [from: store.Remove]
+@effects [Db, Net]
+@calls store.Remove
+@tested true
+@test_hint TestCancel_Pending, TestCancel_AlreadyProcessed
+@since 1.1.0
+@related
+  inverse: Enqueue
+
+---
+
+@fn Status
+@purpose Check the current status of a task
+@sig (ctx: Context, id: TaskID) -> TaskStatus ! QueueError
+@params
+  ctx: Context.
+  id: Task ID.
+@returns TaskStatus with state, attempts, last error
+@errors
+  QueueError.ConnectionLost — Redis connection failed [from: store.Get]
+  QueueError.NotFound — no task with this ID [origin]
+@effects [Db, Net]
+@calls store.Get
+@tested true
+@since 1.0.0
+
+---
+
+@fn Initialize
+@purpose Create the singleton queue instance and connect to Redis
+@sig (config: QueueConfig) -> None ! QueueError
+@params
+  config: Queue configuration.
+    .redis_url: str — Redis connection string. Required.
+    .max_retries: int — Global retry limit. Default 3.
+    .poll_interval: Duration — Worker poll frequency. Default 1s.
+@errors
+  QueueError.ConnectionLost — cannot connect to Redis
+@pre Must be called before any Enqueue/Cancel/Status calls.
+@post global defaultQueue is initialized and ready.
+@effects [Net, Config]
+@writes [global.defaultQueue]
+@thread_safety Not safe. Call once during startup, before spawning workers.
+@since 1.0.0
+
+---
+
+@fn Shutdown
+@purpose Gracefully shut down the queue, draining in-flight tasks
+@sig (ctx: Context) -> None
+@params
+  ctx: Context with shutdown deadline.
+@pre Queue must be initialized.
+@post All in-flight tasks completed or returned to queue. Redis connection closed.
+@effects [Net]
+@thread_safety Safe. Blocks until drain completes or context expires.
+@since 1.0.0
+@related
+  inverse: Initialize
+
+---
+
+@fn ProcessOldTasks
+@purpose Requeue tasks stuck in processing state for longer than timeout
+@sig (ctx: Context, timeout: Duration) -> int ! QueueError
+@deprecated Use DeadLetterSweep instead (since 1.3.0). ProcessOldTasks will be removed in 2.0.
+@params
+  ctx: Context.
+  timeout: Duration after which processing tasks are considered stuck. Must be > 0.
+@returns Number of tasks requeued
+@errors
+  QueueError.ConnectionLost — Redis connection failed [from: store.SweepStale]
+@effects [Db, Net]
+@since 1.0.0
+@related
+  replaces: DeadLetterSweep
+
+---
+
+@type Task
+@kind struct
+@purpose A unit of work to be processed asynchronously
+@fields
+  type: str — task type identifier, used to route to the correct worker handler
+  payload: any — JSON-serializable payload data
+  priority: int — higher priority tasks run first. Default 0. Range [-10, 10].
+  delay: Duration? — optional delay before first attempt
+  max_retries: int? — per-task retry override
+@invariants
+  - type is always non-empty after construction
+  - payload must be JSON-serializable (validated on Enqueue, not construction)
+@constructors
+  Task{type: str, payload: any} — required fields only
+  Task{type: str, payload: any, priority: int, delay: Duration?, max_retries: int?} — full
+@methods None
+@related TaskID, TaskStatus, Enqueue
+
+---
+
+@type TaskStatus
+@kind struct
+@purpose Current status of a queued task
+@fields
+  state: TaskState — current state
+  attempts: int — number of execution attempts so far. Range [0, max_retries].
+  last_error: str? — error message from most recent failed attempt
+  created_at: Time — when the task was enqueued
+  processed_at: Time? — when the task completed (if finished)
+@constructors None — produced by queue.Status()
+@related Task, TaskState
+
+---
+
+@type TaskState
+@kind enum
+@purpose Lifecycle states of a task
+@variants
+  | Pending — waiting in queue
+  | Scheduled — delayed, will become Pending after delay expires
+  | Processing — currently being executed by a worker
+  | Completed — successfully processed
+  | Failed — all retries exhausted
+  | Cancelled — cancelled via Cancel()
+  | DeadLettered — moved to dead-letter queue after repeated failures
+@related TaskStatus
+
+---
+
+@type QueueError
+@kind enum
+@purpose Errors from queue operations
+@variants
+  | ConnectionLost { message: str } — Redis connection failed or timed out
+  | QueueFull { capacity: int } — queue at maximum capacity
+  | NotFound { id: TaskID } — no task with the given ID
+@implements [Error, Display, Debug]
+@related SerializeError
+
+---
+
+@type TaskID
+@kind newtype
+@purpose Opaque identifier for a queued task (UUID v4 string)
+@fields_visibility partial
+@implements [Display, Debug, Hashable, Comparable]
+
+---
+
+@workflow enqueue_and_process
+@purpose Enqueue a task, have it processed by a worker, handle failures
+@steps
+  1. Create: Task{type, payload} — construct task with type and serializable payload
+  2. Enqueue: queue.Enqueue(ctx, task) — persist to Redis, get TaskID
+  3. Poll: Worker picks up task from queue — automatic, based on poll_interval
+  4. Execute: Worker calls registered handler for task.type — handler processes payload
+  5. Ack/Nack: On success, task marked Completed. On failure, retried or DeadLettered.
+@errors_at
+  step 2: QueueError.ConnectionLost | QueueError.QueueFull | SerializeError
+  step 4: handler-specific errors (caught by worker, trigger retry)
+  step 5: QueueError.ConnectionLost (ack/nack fails, task may be reprocessed)
+@antipatterns
+  - Don't process tasks synchronously. Enqueue and return immediately.
+  - Don't assume exactly-once delivery. Handlers must be idempotent.
+  - Don't store large payloads. Keep under 1MB. Use references to external storage.
+@example
+  id, err := queue.Enqueue(ctx, Task{
+    Type:       "process_order",
+    Payload:    OrderPayload{OrderID: 12345},
+    Priority:   5,
+    MaxRetries: intPtr(5),
+  })
+  if err != nil {
+    return fmt.Errorf("enqueue: %w", err)
+  }
+  // Task is now in Redis. A worker will pick it up.
+  // Check status later:
+  status, _ := queue.Status(ctx, id)
+
+---
+
+@workflow retry_and_dead_letter
+@purpose How failed tasks are retried and eventually dead-lettered
+@steps
+  1. Fail: Worker handler returns error — task marked for retry
+  2. Backoff: Exponential backoff calculated — 2^attempt * base_interval
+  3. Requeue: Task moved back to pending with delay — state becomes Scheduled
+  4. Retry: After delay, task returns to Pending and is picked up again
+  5. Exhaust: If attempts >= max_retries, task moves to DeadLettered state
+@antipatterns
+  - Don't retry non-idempotent operations without deduplication.
+  - Don't set max_retries > 10 — exponential backoff makes this ~17 hours.
+
+---
+
+@platform
+  linux: Uses epoll for Redis connection pooling.
+  macos: Uses kqueue for Redis connection pooling.
+  windows: Uses IOCP. Redis connection pool size limited to 128 (Windows socket limit).

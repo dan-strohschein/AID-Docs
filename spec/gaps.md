@@ -1,13 +1,16 @@
 # AID Spec Gaps — Discovered by Cartograph Design
 
 **Date:** 2026-03-27
+**Updated:** 2026-04-01 (v0.2 spec addresses all three gaps)
 **Context:** While designing the Cartograph semantic index (a tool that builds a queryable graph from AID files), we discovered three categories of relationships that AID cannot currently express. These gaps prevent full graph construction from AID alone.
 
 ---
 
-## Gap 1: No `@calls` field — function call relationships
+## Gap 1: ~~No `@calls` field~~ — RESOLVED in v0.2
 
-### The problem
+**Status:** Resolved. `@calls` added to spec as an optional field on `@fn` entries (format.md Section 4.1). Already implemented in `aid-gen-go` via AST analysis. Formalized in v0.2 spec.
+
+### The original problem
 
 AID documents what a function accepts (`@params`), returns (`@returns`), and can error with (`@errors`). It does NOT document which other functions a function calls internally.
 
@@ -44,9 +47,11 @@ Add `@calls` as an optional field on `@fn` entries:
 
 ---
 
-## Gap 2: No field access tracking — `@reads` / `@writes`
+## Gap 2: ~~No field access tracking~~ — RESOLVED in v0.2
 
-### The problem
+**Status:** Resolved. `@reads` and `@writes` added to spec as optional fields on `@fn` entries (format.md Section 4.1). Recommended for functions touching fields of types with `@invariants`. Partially extractable by Layer 1.
+
+### The original problem
 
 AID documents what fields a type has (`@fields`) and what types a function accepts (`@params`). It does NOT document which specific fields a function reads or writes.
 
@@ -86,9 +91,11 @@ Add `@reads` and `@writes` as optional fields on `@fn` entries:
 
 ---
 
-## Gap 3: No error propagation tracking — `@propagates`
+## Gap 3: ~~No error propagation tracking~~ — RESOLVED in v0.2
 
-### The problem
+**Status:** Resolved via inline error annotations instead of a separate `@propagates` field. `@errors` entries now support `[origin]`, `[from: FnName]`, and `[caught: description]` annotations (format.md Section 4.1). More token-efficient than a separate field.
+
+### The original problem
 
 AID documents what errors a function can produce (`@errors`). It does NOT document whether a caller catches, handles, or propagates those errors.
 
@@ -145,11 +152,11 @@ Or more concisely, annotate `@errors` entries with their source:
 | No `@reads`/`@writes` | FieldTouchers | Match `@params` type against `@fields` type (coarse — shows which functions COULD touch the field, not which DO) |
 | No `@propagates` | ErrorProducers | Assume all callers propagate all errors from callees (overly conservative — shows false positives) |
 
-## Recommendation
+## Resolution
 
-Address these in AID spec v0.2:
-1. **`@calls`** — highest impact, easiest to extract mechanically
-2. **`@propagates`** — high impact, moderate extraction difficulty
-3. **`@reads`/`@writes`** — high impact for specific use cases, hardest to extract
+All three gaps addressed in AID spec v0.2:
+1. **`@calls`** — added as L1-extractable field on `@fn` entries
+2. **Error provenance** — solved via `@errors` inline annotations (`[origin]`, `[from:]`, `[caught:]`) instead of a separate `@propagates` field
+3. **`@reads`/`@writes`** — added as optional fields, recommended for invariant-bearing types
 
-For Cartograph v0.1: work with the workarounds. The graph will be AID-complete, not code-complete. Upgrade when the spec catches up.
+Cartograph can now build complete call graphs, field access graphs, and error propagation chains from AID alone.

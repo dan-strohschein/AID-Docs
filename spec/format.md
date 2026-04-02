@@ -1,4 +1,4 @@
-# AID Format Specification v0.1
+# AID Format Specification v0.2
 
 **The complete specification for the Agent Interface Document format.**
 
@@ -16,9 +16,10 @@
 8. [Parsing](#8-parsing)
 9. [Versioning](#9-versioning)
 10. [File organization](#10-file-organization)
-11. [Examples](#11-examples)
-12. [Security considerations](#12-security-considerations)
-13. [Migration](#13-migration)
+11. [Project file (`project.aid`)](#11-project-file-projectaid)
+12. [Examples](#12-examples)
+13. [Security considerations](#13-security-considerations)
+14. [Migration](#14-migration)
 
 ---
 
@@ -90,18 +91,70 @@ The module header identifies the module and provides top-level metadata.
 | `@module` | Yes | Fully qualified module name (e.g., `http/client`, `os.path`, `@org/package`) |
 | `@lang` | Yes | Source language (`python`, `go`, `typescript`, `rust`, `aria`, etc.) |
 | `@version` | Yes | Semantic version of the library/module this AID file describes |
-| `@stability` | No | One of: `experimental`, `unstable`, `stable`, `deprecated`. Default: `stable` |
+| `@stability` | No | One of: `unknown`, `experimental`, `unstable`, `stable`, `deprecated`. Default: `unknown` |
 | `@purpose` | Yes | One-line description of what the module does. Max 120 characters. |
-| `@deps` | No | Comma-separated list of modules this module depends on |
-| `@depends` | No | Packages this module calls into (for selective AID loading) |
+| `@depends` | No | Modules/packages this module depends on (for selective AID loading). Comma-separated or bracketed list. |
 | `@source` | No | URL to source repository or documentation |
 | `@code_version` | No | Git commit hash or tag identifying the code version this AID describes. Format: `git:HASH` |
 | `@aid_status` | No | Document lifecycle status: `draft`, `reviewed`, `approved`, `stale`. Default: `draft` |
 | `@aid_generated_by` | No | Agent role that produced this AID (e.g., `layer1-extractor`, `layer2-generator`) |
 | `@aid_reviewed_by` | No | Agent role that verified this AID (e.g., `layer2-reviewer`) |
 | `@aid_version` | No | Version of the AID spec this file conforms to. Default: latest |
+| `@test_framework` | No | Test framework name (e.g., `go test`, `pytest`, `jest`) |
+| `@test_cmd` | No | Command to run this module's tests |
+| `@test_fixtures` | No | Path to test fixtures/data relative to module root |
+| `@mock_strategy` | No | How dependencies are mocked (e.g., `interfaces`, `monkey-patching`, framework name) |
+| `@env` | No | Environment variables this module reads. Block format with constraint syntax. |
+| `@services` | No | External services this module connects to |
+| `@config_files` | No | Config files read by this module |
+| `@init_order` | No | Numeric initialization order. Lower numbers init first. |
+| `@init_fn` | No | Function that initializes this module |
+| `@shutdown_fn` | No | Function that shuts down this module |
+| `@global_state` | No | Module-level mutable state |
 
-### 3.2 Example
+### 3.2 Test information
+
+Modules can declare their test infrastructure to help agents write tests that match existing patterns:
+
+```
+@test_framework pytest
+@test_cmd pytest tests/unit/test_http_client.py
+@test_fixtures tests/fixtures/
+@mock_strategy interfaces — mock via interface implementation, no mocking framework
+```
+
+### 3.3 Configuration and environment
+
+Modules that read configuration should declare what they need:
+
+```
+@env
+  DATABASE_URL: str — PostgreSQL connection string. Required.
+  REDIS_URL: str — Redis connection string. Default "localhost:6379".
+  JWT_SECRET: str — HMAC signing key. Required. Sensitive.
+@services
+  PostgreSQL: DATABASE_URL — primary data store
+  Stripe API: STRIPE_API_KEY — payment processing
+@config_files
+  config.yaml — application config, loaded at startup
+```
+
+The `@env` block reuses parameter constraint syntax (`Required.`, `Default VALUE.`, `One of: ...`). Mark secrets with `Sensitive.` — agents must not log, print, or hardcode these values.
+
+### 3.4 Module lifecycle
+
+Modules with initialization or shutdown requirements:
+
+```
+@init_order 2
+@init_fn Initialize
+@shutdown_fn Shutdown
+@global_state
+  pool: *pgxpool.Pool — connection pool. Created in Initialize, closed in Shutdown.
+  logger: *slog.Logger — set once in Initialize, read-only after.
+```
+
+### 3.5 Example
 
 ```
 @module http/client
@@ -109,9 +162,11 @@ The module header identifies the module and provides top-level metadata.
 @version 2.31.0
 @stability stable
 @purpose HTTP client library for making web requests and handling responses
-@deps [ssl, dns, url, io]
+@depends [ssl, dns, url, io]
 @source https://github.com/psf/requests
-@aid_version 0.1
+@test_framework pytest
+@test_cmd pytest tests/unit/test_http_client.py
+@aid_version 0.2
 ```
 
 ---
@@ -129,6 +184,7 @@ Functions are the most common entry type and carry the most information.
 | Field | Required | Description |
 |-------|----------|-------------|
 | `@fn` | Yes | Function or method name. Methods use dot notation: `Type.method` |
+| `@visibility` | No | Access level: `public`, `internal`, `protected`, `private`. Default: `public`. |
 | `@purpose` | Yes | One-line description. Max 120 characters. |
 | `@sig` | Yes | Full type signature |
 | `@params` | No* | Parameter descriptions with constraints. *Required if function has parameters. |
@@ -136,12 +192,19 @@ Functions are the most common entry type and carry the most information.
 | `@errors` | No* | Exhaustive list of error types and conditions. *Required if function can error. |
 | `@pre` | No | Preconditions that must hold before calling |
 | `@post` | No | Postconditions guaranteed after successful return |
-| `@effects` | No | Side effects: `[Net]`, `[Fs]`, `[Io]`, `[Env]`, `[Time]`, `[Random]`, `[Callback]`, etc. |
-| `@thread_safety` | No | Thread/concurrency safety guarantees |
+| `@effects` | No | Side effects: `[Net]`, `[Fs]`, `[Io]`, `[Env]`, `[Time]`, `[Random]`, `[Db]`, `[Process]`, `[Gpu]`, `[Callback]`, etc. |
+| `@calls` | No | Comma-separated list of functions this function calls internally |
+| `@thread_safety` | No | Concurrency safety. Structured keyword first, optional elaboration after. See Thread safety vocabulary. |
 | `@complexity` | No | Time and/or space complexity |
 | `@since` | No | Version when this function was introduced |
 | `@deprecated` | No | Deprecation notice with replacement |
-| `@related` | No | Comma-separated names of related entries |
+| `@related` | No | Typed relationship block (see Typed relationships). Untyped flat lists accepted as `sibling:` for backward compat. |
+| `@reads` | No | Fields this function reads. Format: `[Type.field, ...]` |
+| `@writes` | No | Fields this function writes. Format: `[Type.field, ...]` |
+| `@tested` | No | Whether this function has test coverage. `true` or `false`. |
+| `@test_hint` | No | Test function names that exercise this function |
+| `@source_file` | No | Source file path relative to project root. Populated by Layer 1 extractors. |
+| `@source_line` | No | Line number in source file. Populated by Layer 1 extractors. |
 | `@platform` | No | Platform-specific behavior notes (see Platform section) |
 | `@example` | No | Minimal usage example (as few lines as possible) |
 
@@ -217,6 +280,107 @@ Errors are listed under `@errors`, one per line:
 ```
 
 Every possible error the function can produce must be listed. This is the exhaustive contract.
+
+**Error hierarchy:** When using dot notation (`ErrorType.Variant`), the error name must reference a declared `@type` entry with `@kind enum` whose `@variants` include the named variant. For cross-module errors, use qualified names: `module/path.ErrorType.Variant`. This makes the relationship between `@errors` and `@type` mechanically verifiable — a validator can confirm that every error variant listed actually exists as a declared type.
+
+#### Call relationships (`@calls`)
+
+The `@calls` field lists functions this function calls internally:
+
+```
+@fn ProcessOrder
+@sig (order: Order) -> Receipt ! PaymentError
+@calls ValidateOrder, ChargePayment, SendReceipt, UpdateInventory
+```
+
+`@calls` is populated by Layer 1 extractors from AST analysis. It enables call graph queries without reading source code. Bare names refer to the same module; qualified names (`module/path.Name`) refer to other modules.
+
+#### Typed relationships (`@related`)
+
+`@related` uses typed block form to express how entries are related:
+
+```
+@related
+  calls: request
+  produces: Response
+  sibling: post, put, delete
+  wraps: urllib3.request
+  inverse: Response.close
+```
+
+| Relationship | Meaning |
+|-------------|---------|
+| `calls` | This entry calls that entry |
+| `produces` | This entry creates/returns instances of that type |
+| `consumes` | This entry takes that type as input |
+| `sibling` | Same conceptual family, interchangeable alternatives |
+| `wraps` | This entry is a convenience wrapper around that entry |
+| `inverse` | Opposite/counterpart operation (open/close, lock/unlock) |
+| `replaces` | This entry supersedes a deprecated entry |
+
+Every entry in `@related` must have a relationship type prefix. Untyped flat lists (`@related post, put, delete`) are accepted for backward compatibility and treated as `sibling:` entries, but new AID files should always use typed relationships.
+
+#### Error provenance annotations
+
+Error entries can include inline annotations indicating where errors originate or how they're handled:
+
+```
+@errors
+  NotFoundError — user not found [from: GetUser]
+  ValidationError — invalid email format [origin]
+  DbError — database connection failed [from: storage.Query, caught: logged and retried]
+```
+
+| Annotation | Meaning |
+|-----------|---------|
+| `[origin]` | This function originates this error (not propagated) |
+| `[from: FnName]` | Error propagated from the named function |
+| `[caught: description]` | Error is caught internally, not propagated (informational) |
+
+Annotations appear at the end of the error line, inside brackets. They enable error trace queries without reading source code.
+
+#### Field access tracking (`@reads`, `@writes`)
+
+Functions that access specific fields of complex types can declare what they read and write:
+
+```
+@fn UpdateEmail
+@sig (user: User, newEmail: str) -> None
+@reads [User.role]
+@writes [User.email]
+```
+
+Use `@reads` and `@writes` on functions that touch fields of types with `@invariants`. This enables "what touches X.field?" queries.
+
+#### Thread safety vocabulary
+
+`@thread_safety` uses a structured keyword followed by optional elaboration:
+
+| Keyword | Meaning |
+|---------|---------|
+| `safe` | No external synchronization needed. Multiple goroutines/threads can call concurrently. |
+| `immutable` | All state is read-only after construction. Inherently safe. |
+| `channel-based` | Uses channels for inter-goroutine/thread communication. |
+| `requires-sync` | Caller must provide external synchronization (mutex, lock, etc.). |
+| `not-safe` | Not safe for concurrent use. Must be confined to a single goroutine/thread. |
+
+```
+@thread_safety safe. Each call is independent. No shared mutable state.
+@thread_safety not-safe. Call only from the main thread.
+@thread_safety requires-sync. Wrap calls in a mutex if sharing across goroutines.
+```
+
+The keyword comes first, enabling machine parsing. The elaboration after `.` or `—` provides human-readable context.
+
+#### Test coverage (`@tested`, `@test_hint`)
+
+```
+@fn ProcessOrder
+@tested true
+@test_hint TestProcessOrder_ValidOrder, TestProcessOrder_PaymentFails
+```
+
+`@tested` indicates whether the function has test coverage. `@test_hint` lists test function names for agents to reference when writing new tests for related functions.
 
 #### Full function example
 
@@ -302,9 +466,11 @@ Type entries describe structs, classes, enums, unions, or any named data type.
 | Field | Required | Description |
 |-------|----------|-------------|
 | `@type` | Yes | Type name |
+| `@visibility` | No | Access level: `public`, `internal`, `protected`, `private`. Default: `public`. |
 | `@kind` | Yes | One of: `struct`, `enum`, `union`, `class`, `alias`, `newtype` |
 | `@purpose` | Yes | One-line description. Max 120 characters. |
 | `@fields` | No* | Field names, types, and constraints. *Required for struct/class. |
+| `@fields_visibility` | No | `full` or `partial`. Signals whether `@fields` lists all fields. Default: `full`. |
 | `@variants` | No* | Variant names and payloads. *Required for enum/union. |
 | `@invariants` | No | Properties that always hold for valid instances of this type |
 | `@constructors` | No | How instances are created. `None` if only produced by other functions. |
@@ -325,6 +491,24 @@ Type entries describe structs, classes, enums, unions, or any named data type.
   name: Type — description. Constraint.
   name: Type — description. Default value.
 ```
+
+#### `@fields_visibility`
+
+When a type has internal fields that are not part of the public contract, use `@fields_visibility partial` to signal that `@fields` is an incomplete listing:
+
+```
+@type HashMap
+@kind struct
+@fields_visibility partial
+@fields
+  count: int — number of elements
+  capacity: int — current bucket allocation
+```
+
+| Value | Meaning |
+|-------|---------|
+| `full` | All fields are listed (default if omitted) |
+| `partial` | Type has additional undocumented internal fields |
 
 #### Variants syntax (for enums/unions)
 
@@ -383,6 +567,7 @@ Trait entries describe interfaces, protocols, or abstract contracts.
 | Field | Required | Description |
 |-------|----------|-------------|
 | `@trait` | Yes | Trait/interface name |
+| `@visibility` | No | Access level: `public`, `internal`, `protected`, `private`. Default: `public`. |
 | `@purpose` | Yes | One-line description |
 | `@requires` | Yes | Method signatures that implementors must provide |
 | `@provided` | No | Methods with default implementations |
@@ -412,17 +597,20 @@ Trait entries describe interfaces, protocols, or abstract contracts.
 | Field | Required | Description |
 |-------|----------|-------------|
 | `@const` | Yes | Constant name |
+| `@visibility` | No | Access level: `public`, `internal`, `protected`, `private`. Default: `public`. |
 | `@purpose` | Yes | One-line description |
-| `@type` | Yes | The constant's type |
+| `@value_type` | Yes | The constant's type |
 | `@value` | No | The constant's value (if publicly known/useful) |
 | `@since` | No | Version introduced |
+
+Note: The field is `@value_type`, not `@type`, to avoid ambiguity with the `@type` entry keyword.
 
 #### Example
 
 ```
 @const MAX_REDIRECTS
 @purpose Maximum number of HTTP redirects before aborting
-@type int
+@value_type int
 @value 30
 ```
 
@@ -510,7 +698,7 @@ Free-form annotations for deprecation notices, migration notes, TODOs, and other
 
 Workflows describe how multiple entries work together to accomplish a task. This is the tier that has no equivalent in any existing documentation format.
 
-### 5.1 Fields
+### 6.1 Fields
 
 | Field | Required | Description |
 |-------|----------|-------------|
@@ -522,7 +710,7 @@ Workflows describe how multiple entries work together to accomplish a task. This
 | `@variants` | No | Alternative paths through the workflow |
 | `@example` | No | Complete example showing the full workflow |
 
-### 5.2 Steps syntax
+### 6.2 Steps syntax
 
 ```
 @steps
@@ -533,7 +721,7 @@ Workflows describe how multiple entries work together to accomplish a task. This
 
 Steps are numbered sequentially. Each step has a short label, the function/operation involved, and a description of what happens.
 
-### 5.3 Errors-at syntax
+### 6.3 Errors-at syntax
 
 ```
 @errors_at
@@ -543,7 +731,7 @@ Steps are numbered sequentially. Each step has a short label, the function/opera
 
 Maps errors to specific workflow steps so the agent knows exactly where error handling is needed.
 
-### 5.4 Variants syntax
+### 6.4 Variants syntax
 
 ```
 @variants
@@ -551,7 +739,7 @@ Maps errors to specific workflow steps so the agent knows exactly where error ha
   - async: Wrap steps 2-4 in spawn for concurrent execution
 ```
 
-### 5.5 Full workflow example
+### 6.5 Full workflow example
 
 ```
 @workflow http_request_lifecycle
@@ -585,7 +773,18 @@ Maps errors to specific workflow steps so the agent knows exactly where error ha
 
 ## 7. Syntax rules
 
-### 6.1 Field syntax
+### 7.0 Omission vs explicit None
+
+For any optional field, there is a semantic distinction between omission and an explicit value of `None`:
+
+- **Field omitted:** The information is unknown or undocumented. Agents should treat this conservatively — assume constraints, errors, or effects may exist but aren't documented.
+- **`@field None`:** The author explicitly asserts there are none. Agents can rely on this as an affirmative claim.
+
+This distinction applies to: `@pre`, `@post`, `@errors`, `@effects`, `@thread_safety`, `@constructors`, `@invariants`.
+
+Example: `@pre None` means "this function has no preconditions — verified." A missing `@pre` means "preconditions are unknown — be cautious."
+
+### 7.1 Field syntax
 
 All fields start with `@` at the beginning of a line:
 
@@ -603,7 +802,7 @@ Or for multi-line fields:
 
 Multi-line field content is indented by 2 spaces. The field ends when the next `@field`, `---`, or end-of-file is encountered.
 
-### 6.2 Comments
+### 7.2 Comments
 
 Lines starting with `//` are comments and are ignored by parsers:
 
@@ -615,11 +814,11 @@ Lines starting with `//` are comments and are ignored by parsers:
   ...
 ```
 
-### 6.3 Entry separators
+### 7.3 Entry separators
 
 Entries are separated by `---` on its own line (no leading/trailing whitespace).
 
-### 6.4 Inline descriptions
+### 7.4 Inline descriptions
 
 Within field values, `—` (em dash) separates a name from its description:
 
@@ -628,7 +827,7 @@ Within field values, `—` (em dash) separates a name from its description:
   status: int — HTTP status code. Range [100, 599].
 ```
 
-### 6.5 Source references
+### 7.5 Source references
 
 Layer 2 (AI-generated) semantic claims must be linked to the source code that supports them using `[src:]` references:
 
@@ -648,19 +847,19 @@ Source reference syntax:
 
 Paths are relative to the project root. Line numbers reference the code version in `@code_version`. Source references enable **mechanical verification** — a reviewer agent reads the referenced code and confirms the claim.
 
-### 6.6 Lists
+### 7.6 Lists
 
 Lists within fields use comma-separated values in brackets:
 
 ```
-@deps [ssl, dns, url]
+@depends [ssl, dns, url]
 @effects [Net, Fs]
 @implements [Display, Debug, Clone]
 ```
 
-### 6.7 Cross-module references
+### 7.7 Cross-module references
 
-Any field that references another entry (`@related`, `@deps`, `@implements`, `@extends`, `@implementors`, `@constructors`) supports both bare and qualified names.
+Any field that references another entry (`@related`, `@depends`, `@implements`, `@extends`, `@implementors`, `@constructors`) supports both bare and qualified names.
 
 **Bare names** resolve to entries within the current module:
 
@@ -689,7 +888,7 @@ Qualified names are only required for cross-module references. Bare names always
 @related get, post, http/types.Headers
 ```
 
-### 6.8 Sub-fields
+### 7.8 Sub-fields
 
 Nested properties within parameters use `.` prefix with additional indentation:
 
@@ -700,7 +899,7 @@ Nested properties within parameters use `.` prefix with additional indentation:
     .redirects: int. Default 5. Range [0, 20].
 ```
 
-### 6.9 Type notation
+### 7.9 Type notation
 
 AID uses a universal type notation that maps to any source language:
 
@@ -723,7 +922,7 @@ AID uses a universal type notation that maps to any source language:
 
 These are AID-universal types. The `@lang` field in the header tells tooling how to map them to language-specific types.
 
-### 6.10 Inheritance (`@extends`)
+### 7.10 Inheritance (`@extends`)
 
 Types that inherit from a parent class use `@extends` to declare the relationship:
 
@@ -743,7 +942,7 @@ For multiple inheritance (Python, C++):
 
 For languages without class inheritance (Go, Rust), `@extends` is not used. Use `@implements` for interface/trait satisfaction and composition for embedding.
 
-### 6.11 Platform-specific behavior (`@platform`)
+### 7.11 Platform-specific behavior (`@platform`)
 
 When a function or type behaves differently across operating systems or platforms, use `@platform` to document the differences:
 
@@ -767,7 +966,7 @@ If a function is only available on certain platforms:
   macos: Available.
 ```
 
-### 6.12 Well-known protocols
+### 7.12 Well-known protocols
 
 The `@implements` field accepts both language-specific names and AID-universal protocol names. Universal protocol names describe behavioral contracts that exist across languages under different names:
 
@@ -881,7 +1080,7 @@ AidFile {
 }
 ```
 
-Entries are distinguished from workflows by their opening field: `@fn`, `@type`, `@trait`, `@const` produce entries; `@workflow` produces workflows.
+Entries are distinguished from workflows by their opening field: `@fn`, `@type`, `@trait`, `@const` produce entries; `@workflow` produces workflows. In `project.aid` files, `@cross_cutting`, `@convention`, `@lifecycle`, and `@decision` also start entries.
 
 ### 8.5 Error handling
 
@@ -889,7 +1088,17 @@ Parsers should be lenient:
 - **Unknown fields:** Ignore them. Forward compatibility requires this.
 - **Missing required fields:** Warn but don't reject. Partial AID files are valid.
 - **Malformed lines:** Skip with a warning. One bad line should not invalidate the file.
-- **Duplicate fields:** Last value wins. Warn on duplicates.
+- **Duplicate fields:** Last value wins. Warn on duplicates. **Exception:** accumulating fields (see 8.6).
+
+### 8.6 Accumulating fields
+
+Most fields follow the "last value wins" rule — if `@purpose` appears twice, the second value overwrites the first. However, some fields are **accumulating**: multiple occurrences are collected into a list rather than overwriting.
+
+Accumulating fields:
+- **`@sig`** — Multiple signatures represent overloaded calling conventions. Each `@sig` line is a valid way to call the function.
+- **`@rule`** — Multiple rules on a `@convention` entry are collected into an ordered list.
+
+Parsers must implement accumulation for these fields. All other fields use last-value-wins. If a future spec version adds accumulating fields, they will be explicitly listed here.
 
 ---
 
@@ -1135,30 +1344,310 @@ The first `.aidocs/` directory found wins. Tools should not search multiple `.ai
 
 ---
 
-## 11. Examples
+## 11. Project file (`project.aid`)
 
-### 11.1 Example blocks
+Large projects benefit from project-level documentation that spans all modules. While `manifest.aid` indexes individual modules, `project.aid` captures architectural context, cross-cutting concerns, conventions, and lifecycle information that no single module owns.
+
+`project.aid` lives alongside `manifest.aid` in `.aidocs/` and uses the same parsing model: a header followed by entries separated by `---`.
+
+**Co-evolution with `manifest.aid`:** When both files exist, they must stay consistent. Modules referenced in `project.aid` `@modules` lists should exist in `manifest.aid`. When `manifest.aid` adds or removes packages, `project.aid` `@layers`, `@boundaries`, and `@cross_cutting` entries may need updating. The `aid-validate` tool should warn on references to modules that don't exist in the manifest.
+
+### 11.1 Project header
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `@project` | Yes | Project name (same as manifest `@project`) |
+| `@lang` | Yes | Primary language |
+| `@aid_version` | No | AID spec version. Default: latest |
+| `@layers` | No | Named architectural layers, ordered outermost to innermost |
+| `@boundaries` | No | Dependency rules between layers/modules |
+| `@patterns` | No | Project-wide design patterns |
+| `@owners` | No | Module ownership assignments |
+
+#### `@layers`
+
+Named architectural layers with one-line descriptions. Order is significant: first listed = outermost (entry points), last listed = innermost (core domain).
+
+```
+@layers
+  cmd — CLI entry points and flag parsing
+  server — HTTP/gRPC handlers, middleware, routing
+  query — Query planning, optimization, execution
+  storage — Disk I/O, file formats, caching
+  domain — Pure business logic, types, validation
+```
+
+#### `@boundaries`
+
+Dependency rules between layers or modules. Format: `source -> target: ALLOWED|FORBIDDEN [reason]`.
+
+```
+@boundaries
+  domain -> storage: FORBIDDEN
+  domain -> server: FORBIDDEN
+  storage -> query: FORBIDDEN
+  server -> storage: FORBIDDEN. Must go through query layer.
+```
+
+Agents check boundary rules before proposing imports. A `FORBIDDEN` boundary means code in the source layer must not import from the target layer.
+
+#### `@patterns`
+
+Project-wide design patterns. Format: `pattern_name: description`.
+
+```
+@patterns
+  error_handling: Wrap with context at layer boundaries using fmt.Errorf
+  dependency_injection: Constructor injection, no global singletons
+  concurrency: Channel-based communication between goroutines
+  testing: Table-driven tests, interfaces for mocking
+```
+
+#### `@owners`
+
+Module ownership. Format: `module_glob: team/person`.
+
+```
+@owners
+  query/*: @query-team
+  storage/*: @storage-team
+  server/*: @platform-team
+```
+
+### 11.2 Cross-cutting concern entries (`@cross_cutting`)
+
+Cross-cutting concerns document patterns that span multiple modules — authentication flows, error handling strategy, observability, middleware chains. They are the project-level equivalent of `@workflow`.
+
+**Interaction with `@workflow`:** When a module-level `@workflow` overlaps with a `@cross_cutting` entry (e.g., both describe auth), they serve complementary roles. `@cross_cutting` provides the authoritative cross-module flow — how the concern spans the entire system. Module-level `@workflow` provides internal detail for that module's part of the flow. Agents should read `@cross_cutting` for the big picture and module `@workflow` for implementation detail within a single module.
+
+#### Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `@cross_cutting` | Yes | Concern name (snake_case) |
+| `@purpose` | Yes | One-line description |
+| `@modules` | Yes | List of modules involved in this concern |
+| `@flow` | No | Numbered sequence showing how the concern flows across modules |
+| `@errors` | No | Errors specific to this concern, with module-qualified names |
+| `@patterns` | No | Patterns specific to this concern |
+| `@antipatterns` | No | Mistakes to avoid |
+| `@config` | No | Configuration this concern depends on (env vars, config keys) |
+
+#### Example
+
+```
+@cross_cutting auth_flow
+@purpose JWT-based authentication for all HTTP endpoints
+@modules [server/middleware, server/auth, domain/user]
+@flow
+  1. Request arrives at server/middleware.AuthMiddleware
+  2. Extract JWT from Authorization header
+  3. Validate token via server/auth.ValidateToken
+  4. Attach domain/user.User to request context
+  5. Downstream handlers access user via ctx.Value(UserKey)
+@errors
+  server/auth.InvalidTokenError — malformed or expired JWT
+  server/auth.UnauthorizedError — valid JWT but insufficient permissions
+@antipatterns
+  - Don't validate tokens in individual handlers. Always use AuthMiddleware.
+  - Don't pass user as a function parameter. Use context.
+```
+
+### 11.3 Convention entries (`@convention`)
+
+Conventions document project-wide coding standards that new code must follow. These capture the knowledge agents need to write code that fits the existing codebase.
+
+#### Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `@convention` | Yes | Convention name (snake_case) |
+| `@purpose` | Yes | One-line description |
+| `@rule` | Yes | Individual convention rules. Repeatable — multiple `@rule` lines accumulate (like `@sig`). |
+| `@example` | No | Code example showing correct usage |
+| `@antipatterns` | No | Common violations to avoid |
+
+#### Example
+
+```
+@convention error_wrapping
+@purpose How to wrap errors at layer boundaries
+@rule Wrap with fmt.Errorf("[layer]: [context]: %w", err) at every boundary
+@rule Never wrap within the same layer — return the error directly
+@rule Use errors.Is() for matching, never type assertion
+@example
+  result, err := storage.Get(id)
+  if err != nil {
+    return fmt.Errorf("query: fetch document: %w", err)
+  }
+```
+
+Note: `@rule` is an accumulating field — multiple `@rule` lines on the same entry are collected into a list, not overwritten. This follows the same pattern as `@sig` on overloaded functions.
+
+### 11.4 Lifecycle entries (`@lifecycle`)
+
+Lifecycle entries document initialization, shutdown, and other lifecycle sequences.
+
+#### Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `@lifecycle` | Yes | Lifecycle name (`startup`, `shutdown`, `migration`, or custom) |
+| `@purpose` | Yes | One-line description |
+| `@steps` | Yes | Numbered sequence of operations (same syntax as `@workflow` steps) |
+| `@shutdown_order` | No | `reverse` or custom ordering description |
+| `@timeout` | No | Timeout for this lifecycle phase |
+
+#### Example
+
+```
+@lifecycle startup
+@purpose Application initialization sequence
+@steps
+  1. config.Load() — parse config.yaml + env vars
+  2. logging.Init(config.LogLevel) — structured logging setup
+  3. storage.Initialize(config.DatabaseURL) — create connection pool
+  4. query.Initialize(storage.Pool) — start query engine
+  5. server.Start(config.Port) — begin accepting connections
+@shutdown_order reverse
+@timeout 30s
+```
+
+### 11.5 Decision entries
+
+`@decision` entries may also appear in `project.aid` for project-level architectural decisions (same syntax as module-level decisions in Section 5.3).
+
+### 11.6 Full `project.aid` example
+
+```
+@project SyndrDB
+@lang go
+@aid_version 0.2
+
+@layers
+  cmd — CLI entry points and flag parsing
+  server — HTTP/gRPC handlers, middleware, routing
+  query — Query planning, optimization, execution
+  storage — Disk I/O, file formats, caching
+  domain — Pure business logic, types, validation
+
+@boundaries
+  domain -> storage: FORBIDDEN
+  domain -> server: FORBIDDEN
+  storage -> query: FORBIDDEN
+  server -> storage: FORBIDDEN. Must go through query layer.
+
+@patterns
+  error_handling: Wrap with context at layer boundaries using fmt.Errorf
+  dependency_injection: Constructor injection, no global singletons
+  concurrency: Channel-based communication between goroutines
+  testing: Table-driven tests, interfaces for mocking
+
+---
+
+@cross_cutting error_propagation
+@purpose How errors flow from storage through query to server responses
+@modules [domain, storage, query, server]
+@flow
+  1. Domain defines error types (NotFoundError, ValidationError)
+  2. Storage wraps I/O errors: fmt.Errorf("storage: %w", err)
+  3. Query propagates domain errors, wraps storage errors
+  4. Server maps error types to HTTP status codes via error_mapper middleware
+@patterns
+  wrap_at_boundary: fmt.Errorf("[layer]: [context]: %w", err)
+  never_log_and_return: Either log OR return, not both
+
+---
+
+@cross_cutting observability
+@purpose Distributed tracing and metrics across all layers
+@modules [server/middleware, query, storage]
+@flow
+  1. server/middleware.TracingMiddleware creates span from request
+  2. Span propagated via context.Context through all layers
+  3. query and storage create child spans for their operations
+  4. Metrics exported via /metrics endpoint (Prometheus format)
+@config
+  OTEL_ENDPOINT: str — OpenTelemetry collector URL. Default "localhost:4317".
+  METRICS_PORT: int — Prometheus metrics port. Default 9090.
+
+---
+
+@convention error_wrapping
+@purpose Error wrapping at layer boundaries
+@rule Wrap with fmt.Errorf("[layer]: [context]: %w", err) at every boundary
+@rule Never wrap within the same layer
+@rule Use errors.Is() for matching, never type assertion
+
+---
+
+@convention naming
+@purpose Project naming conventions
+@rule Types: PascalCase
+@rule Exported functions: PascalCase
+@rule Unexported functions: camelCase
+@rule Files: snake_case.go
+@rule Packages: single lowercase word, no underscores
+
+---
+
+@lifecycle startup
+@purpose Application initialization sequence
+@steps
+  1. config.Load() — parse config.yaml + env vars
+  2. logging.Init(config.LogLevel) — structured logging setup
+  3. storage.Initialize(config.DatabaseURL) — connection pool
+  4. query.Initialize(storage.Pool) — query engine
+  5. server.Start(config.Port) — begin accepting connections
+@shutdown_order reverse
+
+---
+
+@decision layered_architecture
+@purpose Why strict layer boundaries exist
+@context Go circular imports are compile errors. Team of 5 devs.
+@chosen Strict layered architecture with one-way deps
+@rejected Hexagonal/ports-and-adapters (too much boilerplate for team size)
+@rationale Layer violations cause circular imports in Go. Strict layers keep build times
+  low and make dependency direction predictable for agents.
+```
+
+---
+
+## 12. Examples
+
+### 12.1 Example blocks
 
 The `@example` field on entries contains minimal usage examples. Rules:
 
-- Examples use the language specified by the module's `@lang` field
+- In real AID files, examples **must** use the language specified by the module's `@lang` field
 - Multi-line examples are indented continuation lines (standard AID syntax)
 - Examples should show the ONE thing the entry does — not a full program
 - Examples are patterns for an agent to follow, not executable tests
 
+**Note on spec examples:** The examples in this specification document and in `examples/*.aid` use a language-neutral pseudocode (`:=` for assignment, `?` for error propagation, `{}` for struct literals) for illustrative purposes. This pseudocode is intentional — the spec must be readable regardless of the reader's language background. Real-world AID files generated for a Go project should use Go syntax, for Python should use Python syntax, etc.
+
 ```
+// Spec pseudocode (illustrative):
 @example
   resp := http.get("https://api.example.com/users")?
   data := resp.json[[]User]()?
+
+// Real Go AID file:
+@example
+  resp, err := http.Get("https://api.example.com/users")
+  if err != nil { return err }
+  var data []User
+  err = resp.JSON(&data)
 ```
 
-### 11.2 When to include examples
+### 12.2 When to include examples
 
 Layer 1 extractors should only include examples from existing docstrings. Layer 2 generators may synthesize examples when the usage pattern is non-obvious — especially for workflows and entries with complex constraints.
 
 ---
 
-## 12. Security considerations
+## 13. Security considerations
 
 AID files are documentation artifacts. They carry the same trust level as the source code they describe.
 
@@ -1169,9 +1658,9 @@ AID files are documentation artifacts. They carry the same trust level as the so
 
 ---
 
-## 13. Migration
+## 14. Migration
 
-### 13.1 Spec version compatibility
+### 14.1 Spec version compatibility
 
 The `@aid_version` field declares which AID spec version the file targets. Compatibility rules:
 
@@ -1179,7 +1668,7 @@ The `@aid_version` field declares which AID spec version the file targets. Compa
 - **Minor version changes are additive only.** New fields may be added; existing fields retain their semantics. AID 0.1 files are valid AID 0.2 files.
 - **Breaking changes require a major version bump.** Field semantics may change or fields may be removed only in major versions (0.x → 1.0 allows breaking changes, since pre-1.0 is unstable).
 
-### 13.2 Updating AID files
+### 14.2 Updating AID files
 
 When the spec changes, existing AID files are updated by re-running the generation pipeline:
 
