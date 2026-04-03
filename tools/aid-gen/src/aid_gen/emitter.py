@@ -95,7 +95,7 @@ def _emit_header(header: ModuleHeader) -> str:
     if header.purpose:
         lines.append(f"@purpose {header.purpose}")
     if header.deps:
-        lines.append(f"@deps [{', '.join(header.deps)}]")
+        lines.append(f"@depends [{', '.join(header.deps)}]")
     if header.source:
         lines.append(f"@source {header.source}")
     lines.append(f"@aid_version {header.aid_version}")
@@ -137,6 +137,12 @@ def _emit_fn(entry: FnEntry) -> str:
         lines.append(f"@related {', '.join(entry.related)}")
     if entry.platform:
         lines.extend(_emit_platform(entry.platform))
+    if entry.calls:
+        lines.append(f"@calls [{', '.join(entry.calls)}]")
+    if entry.source_file:
+        lines.append(f"@source_file {entry.source_file}")
+    if entry.source_line is not None:
+        lines.append(f"@source_line {entry.source_line}")
     if entry.example:
         lines.append("@example")
         for line in entry.example.splitlines():
@@ -219,6 +225,10 @@ def _emit_type(entry: TypeEntry) -> str:
         lines.append(f"@methods {', '.join(entry.methods)}")
     if entry.implements:
         lines.append(f"@implements [{', '.join(entry.implements)}]")
+    if entry.source_file:
+        lines.append(f"@source_file {entry.source_file}")
+    if entry.source_line is not None:
+        lines.append(f"@source_line {entry.source_line}")
     if entry.platform:
         lines.extend(_emit_platform(entry.platform))
     if entry.since:
@@ -251,6 +261,10 @@ def _emit_trait(entry: TraitEntry) -> str:
             lines.append(f"  {prov}")
     if entry.implementors:
         lines.append(f"@implementors [{', '.join(entry.implementors)}]")
+    if entry.source_file:
+        lines.append(f"@source_file {entry.source_file}")
+    if entry.source_line is not None:
+        lines.append(f"@source_line {entry.source_line}")
     if entry.related:
         lines.append(f"@related {', '.join(entry.related)}")
     return "\n".join(lines)
@@ -264,6 +278,10 @@ def _emit_const(entry: ConstEntry) -> str:
     lines.append(f"@type {entry.type}")
     if entry.value:
         lines.append(f"@value {entry.value}")
+    if entry.source_file:
+        lines.append(f"@source_file {entry.source_file}")
+    if entry.source_line is not None:
+        lines.append(f"@source_line {entry.source_line}")
     if entry.since:
         lines.append(f"@since {entry.since}")
     return "\n".join(lines)

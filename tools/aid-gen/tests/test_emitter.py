@@ -22,7 +22,7 @@ def test_emit_minimal_header():
     assert "@module test/module" in output
     assert "@lang python" in output
     assert "@version 0.0.0" in output
-    assert "@aid_version 0.1" in output
+    assert "@aid_version 0.2" in output
 
 
 def test_emit_full_header():
@@ -34,13 +34,13 @@ def test_emit_full_header():
         purpose="HTTP client library for making web requests",
         deps=["ssl", "dns"],
         source="https://github.com/psf/requests",
-        aid_version="0.1",
+        aid_version="0.2",
     ))
     output = emit(aid)
     assert "@module http/client" in output
     assert "@stability stable" in output
     assert "@purpose HTTP client library for making web requests" in output
-    assert "@deps [ssl, dns]" in output
+    assert "@depends [ssl, dns]" in output
     assert "@source https://github.com/psf/requests" in output
 
 

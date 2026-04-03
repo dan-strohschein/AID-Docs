@@ -22,7 +22,12 @@ from aid_gen.python.protocols import detect_protocols
 from aid_gen.python.types import python_type_to_aid
 
 
-def extract_module(source: str, module_name: str, version: str = "0.0.0") -> AidFile:
+def extract_module(
+    source: str,
+    module_name: str,
+    version: str = "0.0.0",
+    file_path: str | None = None,
+) -> AidFile:
     """Parse Python source and extract an AID file."""
     tree = ast.parse(source)
 
@@ -35,16 +40,19 @@ def extract_module(source: str, module_name: str, version: str = "0.0.0") -> Aid
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
             if _should_export(node.name, all_names):
-                entries.append(_visit_function(node))
+                entries.append(_visit_function(node, file_path=file_path))
 
         elif isinstance(node, ast.ClassDef):
             if _should_export(node.name, all_names):
                 # Check if it's a NamedTuple subclass
                 base_names = [_get_base_name(b) for b in node.bases]
                 if "NamedTuple" in base_names:
-                    entries.append(_build_namedtuple_class(node))
+                    entry = _build_namedtuple_class(node)
+                    entry.source_file = file_path
+                    entry.source_line = node.lineno
+                    entries.append(entry)
                 else:
-                    class_entries = _visit_class(node)
+                    class_entries = _visit_class(node, file_path=file_path)
                     entries.extend(class_entries)
 
         elif isinstance(node, (ast.Assign, ast.AnnAssign)):
@@ -53,12 +61,16 @@ def extract_module(source: str, module_name: str, version: str = "0.0.0") -> Aid
             if type_entry:
                 name = type_entry.name
                 if _should_export(name, all_names):
+                    type_entry.source_file = file_path
+                    type_entry.source_line = node.lineno
                     entries.append(type_entry)
                 continue
 
             const = _visit_constant(node)
             if const:
                 if _should_export(const.name, all_names):
+                    const.source_file = file_path
+                    const.source_line = node.lineno
                     entries.append(const)
 
     return AidFile(header=header, entries=entries)
@@ -72,13 +84,14 @@ def _build_header(tree: ast.Module, module_name: str, version: str) -> ModuleHea
         lang="python",
         version=version,
         purpose=purpose,
-        aid_version="0.1",
+        aid_version="0.2",
     )
 
 
 def _visit_function(
     node: ast.FunctionDef | ast.AsyncFunctionDef,
     class_name: str | None = None,
+    file_path: str | None = None,
 ) -> FnEntry:
     """Extract a function/method into a FnEntry."""
     name = f"{class_name}.{node.name}" if class_name else node.name
@@ -104,6 +117,9 @@ def _visit_function(
     if _has_decorator(node, "deprecated"):
         deprecated = "Deprecated"
 
+    # Extract calls from function body
+    calls = _extract_calls(node)
+
     entry = FnEntry(
         name=name,
         purpose=purpose,
@@ -111,6 +127,9 @@ def _visit_function(
         params=params if params else None,
         returns=returns,
         deprecated=deprecated,
+        calls=calls,
+        source_file=file_path,
+        source_line=node.lineno,
     )
 
     return entry
@@ -182,6 +201,29 @@ def _build_signature(
     return f"{prefix}({param_str}) -> {return_type}"
 
 
+def _extract_calls(node: ast.FunctionDef | ast.AsyncFunctionDef) -> list[str]:
+    """Walk function body for ast.Call nodes, extract callee names."""
+    calls: set[str] = set()
+    for child in ast.walk(node):
+        if isinstance(child, ast.Call):
+            name = _resolve_call_name(child.func)
+            if name:
+                calls.add(name)
+    return sorted(calls)
+
+
+def _resolve_call_name(node: ast.expr) -> str | None:
+    """Resolve a call target to a name string."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        if isinstance(node.value, ast.Name):
+            return f"{node.value.id}.{node.attr}"
+        # Chained attribute access — just use the method name
+        return node.attr
+    return None
+
+
 def _extract_params(
     node: ast.FunctionDef | ast.AsyncFunctionDef,
     class_name: str | None,
@@ -238,7 +280,7 @@ def _extract_params(
     return params
 
 
-def _visit_class(node: ast.ClassDef) -> list[Entry]:
+def _visit_class(node: ast.ClassDef, file_path: str | None = None) -> list[Entry]:
     """Extract a class into type/trait entries plus method entries."""
     entries: list[Entry] = []
 
@@ -246,15 +288,21 @@ def _visit_class(node: ast.ClassDef) -> list[Entry]:
     is_trait = kind in ("protocol", "abc")
 
     if is_trait:
-        entries.append(_build_trait(node))
+        trait = _build_trait(node)
+        trait.source_file = file_path
+        trait.source_line = node.lineno
+        entries.append(trait)
     else:
-        entries.append(_build_type(node, kind))
+        type_entry = _build_type(node, kind)
+        type_entry.source_file = file_path
+        type_entry.source_line = node.lineno
+        entries.append(type_entry)
 
     # Extract methods as separate FnEntry objects
     for item in node.body:
         if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
             if _is_public_method(item.name) and not _has_decorator(item, "property"):
-                entries.append(_visit_function(item, class_name=node.name))
+                entries.append(_visit_function(item, class_name=node.name, file_path=file_path))
 
     return entries
 

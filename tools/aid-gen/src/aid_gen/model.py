@@ -52,7 +52,7 @@ class ModuleHeader:
     purpose: str | None = None
     deps: list[str] | None = None
     source: str | None = None
-    aid_version: str = "0.1"
+    aid_version: str = "0.2"
 
 
 @dataclass
@@ -74,6 +74,9 @@ class FnEntry:
     related: list[str] | None = None
     platform: list[PlatformNote] | None = None
     example: str | None = None
+    calls: list[str] = field(default_factory=list)
+    source_file: str | None = None
+    source_line: int | None = None
 
 
 @dataclass
@@ -82,6 +85,8 @@ class TypeEntry:
     name: str
     kind: str  # struct, enum, union, class, alias, newtype
     purpose: str | None = None
+    source_file: str | None = None
+    source_line: int | None = None
     fields: list[Field_] | None = None
     variants: list[Variant] | None = None
     invariants: list[str] | None = None
@@ -102,6 +107,8 @@ class TraitEntry:
     """A trait/interface/protocol entry."""
     name: str
     purpose: str | None = None
+    source_file: str | None = None
+    source_line: int | None = None
     requires: list[str] = field(default_factory=list)
     provided: list[str] | None = None
     implementors: list[str] | None = None
@@ -117,6 +124,8 @@ class ConstEntry:
     type: str = "any"
     value: str | None = None
     since: str | None = None
+    source_file: str | None = None
+    source_line: int | None = None
 
 
 @dataclass

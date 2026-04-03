@@ -69,8 +69,11 @@ def _extract_file(
 
     source = file_path.read_text(encoding="utf-8")
 
+    # Compute relative file path for @source_file
+    rel_path = str(file_path)
+
     try:
-        aid_file = extract_module(source, module_name, version)
+        aid_file = extract_module(source, module_name, version, file_path=rel_path)
     except SyntaxError as e:
         print(f"Warning: Could not parse {file_path}: {e}", file=sys.stderr)
         return

@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aidkit"
+version = "0.1.0"
+description = "AID toolkit: parser, validator, emitter, discovery, and L2 pipeline"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+
+[project.scripts]
+aid-parse-py = "aidkit.cli.parse:main"
+aid-validate-py = "aidkit.cli.validate:main"
+aid-discover-py = "aidkit.cli.discover:main"
+aid-gen-l2-py = "aidkit.cli.gen_l2:main"
+aid-manifest-gen-py = "aidkit.cli.manifest_gen:main"
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
