@@ -1,0 +1,18 @@
+mod callchain
+
+// Exported calls an unexported helper to produce a string.
+pub fn exported() -> str {
+    helper()
+}
+
+fn helper() -> str {
+    deep_helper()
+}
+
+fn deep_helper() -> str {
+    "deep"
+}
+
+fn never_called() -> str {
+    "orphan"
+}

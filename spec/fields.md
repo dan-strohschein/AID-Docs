@@ -152,6 +152,8 @@ Bounds appear in two places:
 | `Gpu` | GPU computation |
 | `Config` | Reads configuration (env vars, config files) at runtime. Distinct from `Env` which covers process environment mutation. |
 | `Callback` | Effects depend on caller-provided function arguments. Cannot determine purity without inspecting inputs. |
+| `Async` | Suspends execution or yields the task scheduler (spawn, await, structured-concurrency scopes). |
+| `Ffi` | Calls a foreign function interface (C ABI, extern bindings). |
 
 ---
 
@@ -177,6 +179,7 @@ Bounds appear in two places:
 | `@deprecated` | No | string | Deprecation notice |
 | `@related` | No | list | Related types and functions |
 | `@example` | No | block | Construction and usage |
+| `@error_categories` | No | list | Category traits implemented by this error type. Well-known values: `Transient`, `Permanent`, `UserFault`, `SystemFault`, `Retryable`. |
 
 ### Kind values
 
@@ -188,6 +191,20 @@ Bounds appear in two places:
 | `class` | Class types (Python, Java, TypeScript) |
 | `alias` | Type aliases (interchangeable with the aliased type) |
 | `newtype` | Distinct wrapper types (not interchangeable) |
+
+### Error category traits
+
+A convention for classifying error types so consumers (retry loops, error reporters, telemetry) can dispatch without inspecting each concrete variant.
+
+| Category | Meaning |
+|----------|---------|
+| `Transient` | Recoverable — retry may succeed (timeouts, rate limits, transient network failure). |
+| `Permanent` | Non-recoverable — retry will fail (invalid input, not found, forbidden). |
+| `UserFault` | Caused by caller input; the end user or client should be notified. |
+| `SystemFault` | Caused by infrastructure; on-call / internal operators should be notified. |
+| `Retryable` | Error carries retry metadata (e.g. `retry_after`). Implies `Transient`. |
+
+Extractors populate `@error_categories` by detecting implementations of these traits on the error type. The set is extensible — projects may define additional categories; tooling should preserve unknown values unchanged.
 
 ---
 

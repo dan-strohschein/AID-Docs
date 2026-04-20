@@ -1,0 +1,42 @@
+mod interfaces
+
+// Reader can read data from a source.
+pub trait Reader {
+    fn read(self, p: [u8]) -> i64
+}
+
+// Writer can write data to a destination.
+pub trait Writer {
+    fn write(self, p: [u8]) -> i64
+}
+
+// ReadWriter combines Reader and Writer.
+pub trait ReadWriter: Reader + Writer {}
+
+// Closer can release resources.
+pub trait Closer {
+    fn close(self) -> bool
+}
+
+// Connection represents a network connection.
+pub struct Connection {
+    addr: str,
+    timeout: i64,
+}
+
+impl Reader for Connection {
+    fn read(self, p: [u8]) -> i64 { 0 }
+}
+
+impl Writer for Connection {
+    fn write(self, p: [u8]) -> i64 { 0 }
+}
+
+impl Closer for Connection {
+    fn close(self) -> bool { true }
+}
+
+// dial creates a new connection.
+pub fn dial(addr: str) -> Connection {
+    Connection { addr: addr, timeout: 30 }
+}

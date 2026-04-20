@@ -1,0 +1,42 @@
+mod basic
+
+// MaxRetries is the maximum number of retry attempts.
+pub const MaxRetries: i64 = 3
+
+// DefaultTimeout is the default timeout in seconds.
+pub const DefaultTimeout: f64 = 30.0
+
+// Config holds configuration for the service.
+pub struct Config {
+    host: str,
+    port: i64,
+    debug: bool,
+}
+
+impl Config {
+    // Validate checks if the config is valid.
+    fn validate(self) -> bool {
+        self.host != ""
+    }
+
+    // SetHost updates the hostname.
+    fn set_host(mut self, host: str) {
+        self.host = host
+    }
+}
+
+// new_config creates a new Config with defaults.
+pub fn new_config(host: str, port: i64) -> Config {
+    Config { host: host, port: port, debug: false }
+}
+
+// get retrieves a value by key from the store.
+pub fn get(key: str) -> str {
+    ""
+}
+
+// set stores a value with the given key.
+pub fn set(key: str, value: str) {}
+
+// internal_helper is not exported.
+fn internal_helper() {}

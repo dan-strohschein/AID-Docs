@@ -1,0 +1,27 @@
+mod generics
+
+// Pair holds two values of potentially different types.
+pub struct Pair[A, B] {
+    first: A,
+    second: B,
+}
+
+// Ordered is a constraint for types that support comparison.
+pub trait Ordered {
+    fn compare(self, other: Self) -> i64
+}
+
+// min returns the smaller of two ordered values.
+pub fn min[T: Ordered](a: T, b: T) -> T {
+    if a.compare(b) < 0 { a } else { b }
+}
+
+// map_items applies a function to every element of a list.
+pub fn map_items[T, U](items: [T], f: fn(T) -> U) -> [U] {
+    []
+}
+
+// filter returns elements that satisfy the predicate.
+pub fn filter[T](items: [T], pred: fn(T) -> bool) -> [T] {
+    []
+}

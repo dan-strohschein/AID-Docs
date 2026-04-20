@@ -1,0 +1,45 @@
+mod testpkg
+
+// BundleService provides access to bundles.
+pub trait BundleService {
+    fn get_bundle_by_name(self, database: str, name: str) -> str
+    fn get_document_page(self, bundle_name: str, page_id: i64) -> str
+}
+
+// Index is a generic index interface.
+pub trait Index {
+    fn close(self) -> bool
+    fn flush(self) -> bool
+}
+
+// MockBundleService is a test mock implementing BundleService.
+pub struct MockBundleService {
+    get_bundle_result: str,
+    get_page_result: str,
+}
+
+impl BundleService for MockBundleService {
+    fn get_bundle_by_name(self, database: str, name: str) -> str {
+        self.get_bundle_result
+    }
+    fn get_document_page(self, bundle_name: str, page_id: i64) -> str {
+        self.get_page_result
+    }
+}
+
+// StubIndex is a no-op Index for testing.
+pub struct StubIndex {}
+
+impl Index for StubIndex {
+    fn close(self) -> bool { true }
+    fn flush(self) -> bool { true }
+}
+
+// setup_test_index is a test helper that creates an index for testing.
+pub fn setup_test_index() -> StubIndex {
+    StubIndex {}
+}
+
+test "get_bundle_by_name returns stubbed value" {
+    setup_test_index()
+}

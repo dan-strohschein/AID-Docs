@@ -1,0 +1,27 @@
+mod errors
+
+// StatusCode represents an HTTP status code.
+pub enum StatusCode {
+    StatusOK,
+    StatusNotFound,
+    StatusForbidden,
+    StatusError,
+}
+
+// NotFoundError is returned when a resource doesn't exist.
+pub type NotFoundError =
+    | Missing { resource: str, id: str }
+
+impl Permanent for NotFoundError {}
+impl UserFault for NotFoundError {}
+
+// ValidationError is returned when input is invalid.
+pub type ValidationError =
+    | Invalid { field: str, message: str }
+
+impl UserFault for ValidationError {}
+
+// wrap wraps an error with additional context.
+pub fn wrap(message: str) -> str {
+    message
+}
