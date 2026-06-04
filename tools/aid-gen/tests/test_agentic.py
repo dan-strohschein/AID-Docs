@@ -8,7 +8,15 @@ import pytest
 
 from aid_gen.agentic import extract_agentic
 from aid_gen.emitter import emit
-from aid_gen.model import GraphEntry, ModelEntry, ToolEntry, TypeEntry
+from aid_gen.model import (
+    AgentEntry,
+    ConstEntry,
+    GraphEntry,
+    ModelEntry,
+    PromptEntry,
+    ToolEntry,
+    TypeEntry,
+)
 from aid_gen.python.parser import extract_module
 
 import ast
@@ -18,6 +26,15 @@ FIXTURES = Path(__file__).parent / "fixtures"
 
 def _read(name: str) -> str:
     return (FIXTURES / name).read_text(encoding="utf-8")
+
+
+def _classifies(out: str) -> bool:
+    for line in out.splitlines():
+        s = line.rstrip()
+        if not (s == "" or s == "---" or s.startswith("//")
+                or s.startswith("@") or line.startswith("  ")):
+            return False
+    return True
 
 
 # --- engine detection -------------------------------------------------------
@@ -171,3 +188,144 @@ def test_non_agentic_emit_stays_v02():
     assert "@aid_version 0.2" in out
     assert "@engine" not in out
     assert "@graph" not in out
+
+
+# --- LCEL composition -------------------------------------------------------
+
+
+def test_lcel_engine_and_prompt():
+    result = extract_agentic(ast.parse(_read("lcel_sample.py")))
+    assert result.engine == "lcel"
+    assert len(result.prompts) == 1
+    prompt = result.prompts[0]
+    assert isinstance(prompt, PromptEntry)
+    assert prompt.name == "rag_prompt"
+    input_names = [p.name for p in prompt.inputs]
+    assert "question" in input_names and "context" in input_names
+
+
+def test_lcel_chain_becomes_graph():
+    result = extract_agentic(ast.parse(_read("lcel_sample.py")))
+    chains = [g for g in result.graphs if g.name == "rag_chain"]
+    assert len(chains) == 1
+    g = chains[0]
+    assert g.engine == "lcel"
+    assert g.composition == "sequence"
+    # Pipe order: RunnableParallel -> rag_prompt -> answer_llm
+    assert g.nodes[0].startswith("parallel:")
+    assert any("rag_prompt" in n for n in g.nodes)
+    assert any("answer_llm" in n and "[Llm]" in n for n in g.nodes)
+    assert g.edges == ["parallel -> rag_prompt", "rag_prompt -> answer_llm"]
+
+
+def test_lcel_chain_not_double_emitted_as_type():
+    aid = extract_module(_read("lcel_sample.py"), "lcel/sample")
+    aliases = [e for e in aid.entries
+               if isinstance(e, (TypeEntry, ConstEntry)) and e.name == "rag_chain"]
+    assert aliases == []
+    graphs = [e for e in aid.entries if isinstance(e, GraphEntry) and e.name == "rag_chain"]
+    assert len(graphs) == 1
+
+
+def test_lcel_emit_parseable():
+    aid = extract_module(_read("lcel_sample.py"), "lcel/sample", file_path="lcel_sample.py")
+    out = emit(aid)
+    assert "@engine lcel" in out
+    assert "@prompt rag_prompt" in out
+    assert "@composition sequence" in out
+    assert _classifies(out)
+
+
+def test_pipe_chain_not_misread_when_not_lcel():
+    # A bitwise-or on ints inside an agentic module must not become a graph.
+    src = (
+        "from langchain_core.tools import tool\n"
+        "FLAGS = 1 | 2 | 4\n"
+        "@tool\n"
+        "def t(x: int) -> int:\n"
+        "    '''t'''\n"
+        "    return x\n"
+    )
+    result = extract_agentic(ast.parse(src))
+    assert all(g.name != "FLAGS" for g in result.graphs)
+
+
+# --- agents -----------------------------------------------------------------
+
+
+def test_create_react_agent_extracted():
+    src = (
+        "from langgraph.prebuilt import create_react_agent\n"
+        "from langchain_anthropic import ChatAnthropic\n"
+        "llm = ChatAnthropic(model='claude-opus-4-8')\n"
+        "researcher = create_react_agent(llm, [web_search, fetch_url])\n"
+    )
+    result = extract_agentic(ast.parse(src))
+    agents = result.agents
+    assert len(agents) == 1
+    a = agents[0]
+    assert isinstance(a, AgentEntry)
+    assert a.name == "researcher"
+    assert a.model == "llm"
+    assert a.tools == ["web_search", "fetch_url"]
+    assert a.autonomy == "autonomous"
+
+
+def test_agent_executor_extracted():
+    src = (
+        "from langchain.agents import AgentExecutor\n"
+        "exec_agent = AgentExecutor(agent=a, tools=[search])\n"
+    )
+    result = extract_agentic(ast.parse(src))
+    assert result.agents[0].name == "exec_agent"
+    assert result.agents[0].tools == ["search"]
+
+
+# --- pipecat ----------------------------------------------------------------
+
+
+def test_pipecat_engine_detected():
+    result = extract_agentic(ast.parse(_read("pipecat_sample.py")))
+    assert result.engine == "pipecat"
+
+
+def test_pipecat_pipeline_graph():
+    result = extract_agentic(ast.parse(_read("pipecat_sample.py")))
+    assert len(result.graphs) == 1
+    g = result.graphs[0]
+    assert g.engine == "pipecat"
+    assert g.name == "pipeline"
+    node_names = [n.split(":")[0] for n in g.nodes]
+    assert node_names == ["transport_in", "stt", "llm", "tts"]
+    assert g.edges == [
+        "transport_in -> stt [downstream]",
+        "stt -> llm [downstream]",
+        "llm -> tts [downstream]",
+    ]
+    # streaming service effects inferred
+    assert any("[Llm, Net, Stream]" in n for n in g.nodes)
+
+
+def test_pipecat_frames_collected():
+    result = extract_agentic(ast.parse(_read("pipecat_sample.py")))
+    frames = result.graphs[0].frames
+    joined = " ".join(frames)
+    assert "TranscriptionFrame" in joined
+    assert "TextFrame" in joined
+    # No double period
+    assert ".." not in joined
+    # FrameProcessor subclasses are not frames
+    assert "DeepgramSTT" not in joined
+
+
+def test_pipecat_emit_parseable():
+    aid = extract_module(_read("pipecat_sample.py"), "pipecat/sample",
+                         file_path="pipecat_sample.py")
+    out = emit(aid)
+    assert "@engine pipecat" in out
+    assert "@frames" in out
+    assert "@graph pipeline" in out
+    assert "[downstream]" in out
+    assert _classifies(out)
+    # Frame subclasses still emitted as types
+    assert "@type TranscriptionFrame" in out

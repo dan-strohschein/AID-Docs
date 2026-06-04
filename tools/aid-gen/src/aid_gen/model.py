@@ -191,13 +191,51 @@ class GraphEntry:
     cycles: list[str] | None = None
     interrupts: list[str] | None = None
     composition: str | None = None
+    frames: list[str] | None = None  # Tier 4: push-based frame vocabulary (Pipecat)
     effects: list[str] | None = None
     source_file: str | None = None
     source_line: int | None = None
 
 
+@dataclass
+class AgentEntry:
+    """A Tier 4 @agent entry — an autonomous actor."""
+    name: str
+    purpose: str | None = None
+    model: str | None = None
+    system_prompt: str | None = None
+    tools: list[str] | None = None
+    handoffs: list[str] | None = None
+    autonomy: str | None = None
+    guardrails: list[str] | None = None
+    memory: str | None = None
+    output: str | None = None
+    determinism: str | None = None
+    effects: list[str] | None = None
+    source_file: str | None = None
+    source_line: int | None = None
+
+
+@dataclass
+class PromptEntry:
+    """A Tier 4 @prompt entry — a templated model invocation contract."""
+    name: str
+    purpose: str | None = None
+    inputs: list[Param] | None = None
+    output: str | None = None
+    model: str | None = None
+    template: str | None = None
+    determinism: str | None = None
+    failure_modes: list[str] | None = None
+    source_file: str | None = None
+    source_line: int | None = None
+
+
 # Union of all entry types
-Entry = Union[FnEntry, TypeEntry, TraitEntry, ConstEntry, ToolEntry, ModelEntry, GraphEntry]
+Entry = Union[
+    FnEntry, TypeEntry, TraitEntry, ConstEntry,
+    ToolEntry, ModelEntry, GraphEntry, AgentEntry, PromptEntry,
+]
 
 
 @dataclass

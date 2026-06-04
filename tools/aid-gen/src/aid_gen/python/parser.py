@@ -41,6 +41,11 @@ def extract_module(
     # Tier 4: detect agentic (LangGraph / LangChain) constructs up front so we can
     # promote @tool functions and annotate state channels as we walk the module.
     agentic = extract_agentic(tree, file_path)
+    # Variables that became @model/@prompt/@agent/@graph entries — don't also emit
+    # them as constants or type aliases (e.g. an LCEL chain `a | b` looks like a union).
+    agentic_var_names = {
+        e.name for e in (agentic.models + agentic.prompts + agentic.agents + agentic.graphs)
+    }
 
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -63,6 +68,8 @@ def extract_module(
                     entries.extend(class_entries)
 
         elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            if _assign_target_name(node) in agentic_var_names:
+                continue  # already emitted as a Tier 4 entry
             # Check for special type constructs before treating as constant
             type_entry = _visit_type_construct(node)
             if type_entry:
@@ -89,9 +96,20 @@ def extract_module(
         _apply_channels(entries, agentic.channels)
         entries.extend(agentic.tools)
         entries.extend(agentic.models)
+        entries.extend(agentic.prompts)
+        entries.extend(agentic.agents)
         entries.extend(agentic.graphs)
 
     return AidFile(header=header, entries=entries)
+
+
+def _assign_target_name(node: ast.Assign | ast.AnnAssign) -> str | None:
+    """The single bare-Name target of an assignment, if any."""
+    if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+        return node.target.id
+    if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+        return node.targets[0].id
+    return None
 
 
 def _apply_channels(entries: list[Entry], channels: dict[str, dict[str, str]]) -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from aid_gen.model import (
+    AgentEntry,
     AidFile,
     ConstEntry,
     FnEntry,
@@ -11,6 +12,7 @@ from aid_gen.model import (
     ModuleHeader,
     Param,
     PlatformNote,
+    PromptEntry,
     ToolEntry,
     TraitEntry,
     TypeEntry,
@@ -44,6 +46,10 @@ def emit(aid_file: AidFile, include_provenance: bool = True) -> str:
             parts.append(_emit_tool(entry))
         elif isinstance(entry, ModelEntry):
             parts.append(_emit_model(entry))
+        elif isinstance(entry, PromptEntry):
+            parts.append(_emit_prompt(entry))
+        elif isinstance(entry, AgentEntry):
+            parts.append(_emit_agent(entry))
         elif isinstance(entry, GraphEntry):
             parts.append(_emit_graph(entry))
 
@@ -63,6 +69,8 @@ def _order_entries(entries: list) -> list:
     # Tier 4 entries, kept in source order after the standard entries
     models: list = [e for e in entries if isinstance(e, ModelEntry)]
     tools: list = [e for e in entries if isinstance(e, ToolEntry)]
+    prompts: list = [e for e in entries if isinstance(e, PromptEntry)]
+    agents: list = [e for e in entries if isinstance(e, AgentEntry)]
     graphs: list = [e for e in entries if isinstance(e, GraphEntry)]
 
     # Collect type names for grouping methods
@@ -95,7 +103,8 @@ def _order_entries(entries: list) -> list:
             if "." not in entry.name or entry.name.split(".")[0] not in type_names:
                 standalone_fns.append(entry)
 
-    return consts + types_with_methods + traits + standalone_fns + models + tools + graphs
+    return (consts + types_with_methods + traits + standalone_fns
+            + models + prompts + tools + agents + graphs)
 
 
 def _emit_header(header: ModuleHeader) -> str:
@@ -377,6 +386,10 @@ def _emit_graph(entry: GraphEntry) -> str:
         lines.append(f"@state {entry.state}")
     if entry.entry:
         lines.append(f"@entry {entry.entry}")
+    if entry.frames:
+        lines.append("@frames")
+        for fr in entry.frames:
+            lines.append(f"  {fr}")
     if entry.nodes:
         lines.append("@nodes")
         for n in entry.nodes:
@@ -399,6 +412,68 @@ def _emit_graph(entry: GraphEntry) -> str:
             lines.append(f"  {i}")
     if entry.composition:
         lines.append(f"@composition {entry.composition}")
+    if entry.effects:
+        lines.append(f"@effects [{', '.join(entry.effects)}]")
+    if entry.source_file:
+        lines.append(f"@source_file {entry.source_file}")
+    if entry.source_line is not None:
+        lines.append(f"@source_line {entry.source_line}")
+    return "\n".join(lines)
+
+
+def _emit_prompt(entry: PromptEntry) -> str:
+    lines: list[str] = []
+    lines.append(f"@prompt {entry.name}")
+    if entry.purpose:
+        lines.append(f"@purpose {entry.purpose}")
+    if entry.inputs:
+        lines.append("@inputs")
+        for param in entry.inputs:
+            lines.extend(_emit_param(param, indent=2))
+    if entry.output:
+        lines.append(f"@output {entry.output}")
+    if entry.model:
+        lines.append(f"@model {entry.model}")
+    if entry.template:
+        lines.append(f"@template {entry.template}")
+    if entry.determinism:
+        lines.append(f"@determinism {entry.determinism}")
+    if entry.failure_modes:
+        lines.append("@failure_modes")
+        for fm in entry.failure_modes:
+            lines.append(f"  - {fm}")
+    if entry.source_file:
+        lines.append(f"@source_file {entry.source_file}")
+    if entry.source_line is not None:
+        lines.append(f"@source_line {entry.source_line}")
+    return "\n".join(lines)
+
+
+def _emit_agent(entry: AgentEntry) -> str:
+    lines: list[str] = []
+    lines.append(f"@agent {entry.name}")
+    if entry.purpose:
+        lines.append(f"@purpose {entry.purpose}")
+    if entry.model:
+        lines.append(f"@model {entry.model}")
+    if entry.system_prompt:
+        lines.append(f"@system_prompt {entry.system_prompt}")
+    if entry.tools:
+        lines.append(f"@tools [{', '.join(entry.tools)}]")
+    if entry.handoffs:
+        lines.append(f"@handoffs [{', '.join(entry.handoffs)}]")
+    if entry.autonomy:
+        lines.append(f"@autonomy {entry.autonomy}")
+    if entry.guardrails:
+        lines.append("@guardrails")
+        for g in entry.guardrails:
+            lines.append(f"  - {g}")
+    if entry.memory:
+        lines.append(f"@memory {entry.memory}")
+    if entry.output:
+        lines.append(f"@output {entry.output}")
+    if entry.determinism:
+        lines.append(f"@determinism {entry.determinism}")
     if entry.effects:
         lines.append(f"@effects [{', '.join(entry.effects)}]")
     if entry.source_file:
