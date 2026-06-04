@@ -1,0 +1,139 @@
+@module rag/pipeline
+@lang python
+@version 0.1.0
+@stability experimental
+@purpose Retrieval-augmented generation chain: retrieve context, prompt, generate, parse to structured output
+@engine lcel
+@depends [langchain_core, langchain_anthropic, langchain_chroma]
+@source https://github.com/example/rag-pipeline
+@aid_version 0.3
+
+---
+
+@type Document
+@kind struct
+@purpose A retrieved context chunk with provenance
+@fields
+  content: str — Chunk text.
+  source: str — Origin URI or filename.
+  score: float — Similarity score. Range [0, 1].
+@implements [Serializable]
+
+---
+
+@type Answer
+@kind struct
+@purpose Structured RAG output: a response plus the sources it draws on
+@fields
+  text: str — The answer, grounded in retrieved context.
+  citations: [str] — Source URIs supporting the answer. Length [1, 10].
+@invariants
+  - Every claim in text is supported by at least one citation
+@implements [Serializable]
+
+---
+
+@model answer_llm
+@purpose LLM that generates the grounded answer
+@provider anthropic
+@model_id claude-opus-4-8
+@params temperature=0.0, max_tokens=2048
+@structured_output Answer
+@determinism nondeterministic
+@effects [Llm, Net]
+
+---
+
+@tool vector_search
+@purpose Retrieve the top-k most relevant context chunks for a query
+@sig (query: str, k?: int) -> [Document] ! RetrievalError
+@params
+  query: Natural-language query. Required.
+  k: Number of chunks. Default 4. Range [1, 20].
+@returns Documents ranked by similarity, highest first
+@errors
+  RetrievalError.StoreUnavailable — vector store connection failed [origin]
+@schema tools/vector_search.schema.json
+@invoked_by code
+@effects [Embed, Net]
+@determinism deterministic
+@idempotent true
+
+---
+
+@prompt rag_prompt
+@purpose Build the grounded-answer prompt from the question and retrieved context
+@inputs
+  question: str — The user's question. Required.
+  context: [Document] — Retrieved chunks to ground the answer. Required.
+@output Answer — model is constrained to the Answer schema
+@model answer_llm
+@template prompts/rag.j2
+@determinism nondeterministic. temperature=0 reduces variance.
+@failure_modes
+  - May answer from parametric knowledge instead of context — instruct "answer only from context" and validate citations.
+  - May emit citations not present in context — validate every citation against the retrieved Document sources.
+
+---
+
+@fn format_context
+@purpose Render retrieved Documents into the prompt's context variable
+@sig (docs: [Document]) -> str
+@params
+  docs: Retrieved documents. Required.
+@returns Concatenated, source-tagged context block
+@effects None
+@determinism deterministic
+
+---
+
+@graph rag_chain
+@purpose Retrieval-augmented generation as an LCEL sequence
+@engine lcel
+@composition sequence
+@nodes
+  retrieve: vector_search — fetch top-k context chunks [Embed, Net]
+  format: format_context — render chunks into the prompt context
+  prompt: rag_prompt — fill the grounded-answer template
+  generate: answer_llm — produce a structured Answer [Llm, Net, Stream]
+  parse: structured_output — coerce the model output to Answer
+@edges
+  retrieve -> format
+  format -> prompt
+  prompt -> generate
+  generate -> parse
+@effects [Embed, Llm, Net, Stream]
+@antipatterns
+  - Don't skip the citation-validation step — the model may cite sources that were never retrieved.
+  - Don't stream the structured Answer token-by-token to the user; parse to Answer first, then render.
+@example
+  chain = (
+      RunnableParallel({"context": retriever | format_context, "question": RunnablePassthrough()})
+      | rag_prompt
+      | answer_llm.with_structured_output(Answer)
+  )
+  answer = chain.invoke("What changed in the v0.3 spec?")
+
+---
+
+@invariants
+  - The chain runs strictly left to right; each stage's output is the next stage's input. [src: rag/pipeline.py:40-58]
+  - answer_llm is bound with structured output, so `generate` always yields a schema-valid Answer or raises. [src: rag/pipeline.py:62-70]
+
+---
+
+@workflow grounded_qa
+@purpose Answer a user question with cited, context-grounded output
+@steps
+  1. Retrieve: vector_search(question) — fetch the top-k relevant chunks
+  2. Format: format_context(docs) — render chunks into the prompt context
+  3. Generate: answer_llm via rag_prompt — produce a structured Answer
+  4. Validate: confirm every Answer.citation appears in the retrieved sources
+@errors_at
+  step 1: RetrievalError — vector store unavailable
+  step 3: model may emit ungrounded claims — caught by step 4 validation
+@antipatterns
+  - Don't trust the answer without step 4. A confident answer with fabricated citations is the core RAG failure mode.
+@example
+  answer = rag_chain.invoke("What changed in the v0.3 spec?")
+  assert all(c in {d.source for d in retrieved} for c in answer.citations)

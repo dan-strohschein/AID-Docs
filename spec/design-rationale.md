@@ -502,7 +502,7 @@ v0.1 defaulted to `stable`, which is the optimistic assumption. But AID's core p
 
 ## 51. Why remove `@deps` entirely instead of deprecating?
 
-At v0.2 with no public ecosystem, carrying a deprecated alias is pure parser complexity with zero benefit. Every future parser implementation must handle both `@deps` and `@depends` forever. The spec explicitly allows breaking changes pre-1.0 (Section 14.1). Clean removal is the right choice.
+At v0.2 with no public ecosystem, carrying a deprecated alias is pure parser complexity with zero benefit. Every future parser implementation must handle both `@deps` and `@depends` forever. The spec explicitly allows breaking changes pre-1.0 (Section 15.1). Clean removal is the right choice.
 
 ## 52. Why `@value_type` instead of `@type` in `@const` entries?
 
@@ -524,12 +524,60 @@ Untyped flat lists are still accepted for backward compatibility and silently tr
 
 ## 55. Why accumulating fields need explicit documentation?
 
-The parser spec said "Duplicate fields: last value wins." But `@sig` and `@rule` were documented as accumulating. A parser author following only Section 8 would build a parser that breaks overloaded signatures — a real bug.
+The parser spec said "Duplicate fields: last value wins." But `@sig` and `@rule` were documented as accumulating. A parser author following only Section 9 would build a parser that breaks overloaded signatures — a real bug.
 
-Accumulating fields are now explicitly listed in Section 8.6. The list is intentionally short (`@sig`, `@rule`) to minimize surprise. Any future accumulating field must be added to this list. The principle: fields overwrite by default, accumulation is the rare exception that must be declared.
+Accumulating fields are now explicitly listed in Section 9.6. The list is intentionally short (`@sig`, `@rule`) to minimize surprise. Any future accumulating field must be added to this list. The principle: fields overwrite by default, accumulation is the rare exception that must be declared.
 
 ## 56. Why formalize error hierarchy (dot notation)?
 
 `@errors` used dot notation (`HttpError.DnsFailure`) implicitly, but never formally defined the relationship to `@type` entries with `@variants`. An agent couldn't mechanically verify that an error variant in `@errors` actually exists as a declared type.
 
 The formalization makes this relationship explicit: `ErrorType.Variant` in `@errors` must reference a declared `@type` with matching `@variants`. This enables the `aid-validate` tool to check error consistency — a real safety net against typos and stale error references.
+
+---
+
+## v0.3 Additions — Agentic & dataflow systems
+
+v0.3 adds Tier 4 so AID can describe agent frameworks (LangGraph, Pipecat, LangChain) and the systems built on them. The motivating gap: AID v0.2 describes an *API surface* and *linear workflows*, but an agentic system is a *dataflow graph* — nodes, edges, conditional routing, cycles, merging state, model-driven tool selection, and non-determinism. None of that fits `@fn`/`@type`/`@workflow`.
+
+## 57. Why a new tier instead of overloading `@workflow`?
+
+`@workflow` is a numbered sequence: step 1, then 2, then 3. It has no edges, no branches, and — critically — no **cycles**. The defining behavior of an agent ("reason → act → observe → reason, until done") is a loop with a conditional exit. You cannot express a back-edge in a numbered list without lying about the structure.
+
+A `@graph` has named nodes, directed `@edges` (including back-edges), `@conditional_edges` (router-driven branching), and an explicit `@cycles` block stating the loop and its bound. This is a fundamentally different topology from a workflow, so it gets a fundamentally different entry type. `@workflow` survives unchanged for the linear cases where it is the right tool; `@graph` covers the graph cases it never could.
+
+## 58. Why `@engine` — the framework analog of `@lang`?
+
+The same dilemma that motivated language-agnostic types (rationale #12) recurs at the framework level. If AID hardcoded LangGraph's vocabulary, a Pipecat or LangChain system would need a different schema, and "other highly complex AI frameworks" would need yet more. That doesn't scale and it isn't future-proof.
+
+Instead, the Tier 4 primitives — graph, state-channels, tool, agent, prompt, model, stream — are **universal**, and `@engine` names which framework they map to, exactly as `@lang` names which language a type maps to. An agent that knows LangGraph maps `@nodes`/`@edges`/`@state` to `add_node`/`add_edge`/`StateGraph`; an agent that doesn't still reads the universal topology. New frameworks need no spec change — only a new `@engine` value (and a mapping in `generation.md`).
+
+## 59. Why reducers as a field constraint, not a new block?
+
+LangGraph state is a data type whose fields merge on update (`messages` appends, `step_count` adds). The merge rule is per-field. The token-cheap, parser-cheap way to attach per-field semantics is the existing `@fields` constraint syntax — so a reducer is just another constraint keyword (`reducer: append.`), gated behind an opt-in `@channels` marker on the `@type`.
+
+The rejected alternative was a separate `@channels` block listing each channel and its reducer — that duplicates the field list the type already declares, doubling the tokens and creating a consistency hazard (two places that can disagree). Reusing `@fields` keeps one source of truth and adds zero new parsing rules. Knowing the reducer is not cosmetic: a node that returns the whole `messages` list under an `append` reducer silently duplicates the entire history — exactly the class of bug AID exists to prevent.
+
+## 60. Why `@tool` is distinct from `@fn`?
+
+A `@tool` is structurally an `@fn` — signature, params, errors. What makes it a separate entry type is a single load-bearing fact: **the model decides when to call it**. That changes how an agent reasons about the code. A tool's `@purpose` is not just documentation; it is the text the model reads to choose the tool, so its wording matters. A tool needs a `@schema` (what the model sees), an `@invoked_by` (llm/agent/code), and an `@idempotent` flag (because the model may call it repeatedly). Burying these on a generic `@fn` would hide the most important property — that this function is part of the model's action space — from any agent scanning entry types.
+
+## 61. Why prompts and system prompts are pointers, not inlined?
+
+AID's first principle is "no prose." A prompt template or system prompt is prose — often long prose. Inlining it would blow the token budget of every AID file that references an agent, and would duplicate content that already lives in a versioned file. So `@template` and `@system_prompt` are **paths**, not text. The AID file documents the prompt's *contract* (inputs, output shape, model, failure modes) — the machine-actionable part — and points to the file for the words. This mirrors how `@source`/`[src:]` point at code rather than copying it.
+
+## 62. Why a `@determinism` field and the eval-not-assert principle?
+
+Agentic units are frequently non-deterministic: the same input yields different output across runs. This is not a footnote — it dictates how an agent writes tests against the unit. Against a `deterministic` function you assert exact equality. Against a `nondeterministic` model call you must assert *properties* (schema-valid, non-empty, cites a source) and add retries/guardrails. Without a structured signal, an agent generates brittle exact-match tests that fail randomly. `@determinism` (`deterministic`/`nondeterministic`/`seeded`) makes the property explicit; omission means "unknown," consistent with the omission-vs-None rule.
+
+## 63. Why new effect tags (`Llm`, `Tool`, `Embed`, `Stream`)?
+
+The existing effect vocabulary describes I/O (`Net`, `Fs`, `Db`). Agentic systems have effects that are categorically different and that an agent must reason about: `Llm` implies cost, latency, and non-determinism; `Tool` means "effects depend on which tools the model picks" (a model-driven cousin of `Callback`); `Embed` is a distinct compute cost; `Stream` means the unit yields incremental output and must be consumed as a stream, not awaited as a single value. Folding these into existing tags would lose exactly the information that makes them worth tagging. The set is small and closed, like the original effect vocabulary.
+
+## 64. Why are memory and interrupts lightweight fields, not their own tier?
+
+Human-in-the-loop interrupts and state persistence are real concepts, but they are *properties of a graph or agent*, not standalone structures. An interrupt is "pause before/after this node" — a line in the graph's `@interrupts` block. Memory is "this agent's state is thread-scoped" — a one-word `@memory` value, with the backend declared once on the header via `@checkpointer`. Promoting these to their own tier would add ceremony without adding expressive power. Keeping them as fields on the entries they modify keeps the information co-located with what it describes (the same reasoning as rationale #28 for module annotations).
+
+## 65. Why fold LCEL composition into `@graph` rather than a separate `@chain`?
+
+LangChain's Expression Language (`a | b | c`, `RunnableParallel`, `RunnableBranch`) is just a graph with constrained topology — sequences, fan-out, and predicate branches. Rather than a parallel `@chain` entry type that would overlap ~90% with `@graph`, `@graph` carries an optional `@composition` operator (`sequence`/`parallel`/`branch`/`fallback`/`map`) for the cases where the topology *is* a Runnable composition. One construct covers explicit node graphs (LangGraph), push pipelines (Pipecat, via `@frames` and directional edges), and Runnable compositions (LCEL) — the generality that `@engine` promises.

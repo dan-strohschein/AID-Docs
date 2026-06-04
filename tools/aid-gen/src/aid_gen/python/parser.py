@@ -18,6 +18,7 @@ from aid_gen.model import (
     TypeEntry,
     Variant,
 )
+from aid_gen.agentic import extract_agentic
 from aid_gen.python.protocols import detect_protocols
 from aid_gen.python.types import python_type_to_aid
 
@@ -37,8 +38,14 @@ def extract_module(
     header = _build_header(tree, module_name, version)
     entries: list[Entry] = []
 
+    # Tier 4: detect agentic (LangGraph / LangChain) constructs up front so we can
+    # promote @tool functions and annotate state channels as we walk the module.
+    agentic = extract_agentic(tree, file_path)
+
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if node.name in agentic.tool_fn_names:
+                continue  # emitted as a @tool entry, not a plain @fn
             if _should_export(node.name, all_names):
                 entries.append(_visit_function(node, file_path=file_path))
 
@@ -73,7 +80,29 @@ def extract_module(
                     const.source_line = node.lineno
                     entries.append(const)
 
+    # Tier 4: fold in agentic constructs.
+    if agentic.engine:
+        header.engine = agentic.engine
+        header.aid_version = "0.3"
+        if agentic.checkpointer:
+            header.checkpointer = agentic.checkpointer
+        _apply_channels(entries, agentic.channels)
+        entries.extend(agentic.tools)
+        entries.extend(agentic.models)
+        entries.extend(agentic.graphs)
+
     return AidFile(header=header, entries=entries)
+
+
+def _apply_channels(entries: list[Entry], channels: dict[str, dict[str, str]]) -> None:
+    """Mark state TypeEntries as @channels and annotate their fields with reducers."""
+    for entry in entries:
+        if isinstance(entry, TypeEntry) and entry.name in channels:
+            entry.channels = True
+            reducers = channels[entry.name]
+            for f in entry.fields or []:
+                if f.name in reducers:
+                    f.reducer = reducers[f.name]
 
 
 def _build_header(tree: ast.Module, module_name: str, version: str) -> ModuleHeader:

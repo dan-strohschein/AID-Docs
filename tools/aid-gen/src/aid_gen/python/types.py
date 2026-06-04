@@ -79,6 +79,12 @@ def _convert_subscript(node: ast.Subscript) -> str:
     """Handle subscripted types: list[int], Optional[str], Callable[[A], B], etc."""
     base_name = _get_base_name(node.value)
 
+    # Annotated[T, ...metadata] → T (metadata, e.g. a LangGraph reducer, is captured elsewhere)
+    if base_name in ("Annotated",):
+        args = _get_subscript_args(node.slice)
+        if args:
+            return python_type_to_aid(args[0])
+
     # Optional[T] → T?
     if base_name in ("Optional",):
         inner = python_type_to_aid(node.slice)

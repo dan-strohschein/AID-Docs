@@ -31,6 +31,8 @@
 | `@init_fn` | No | string | Function that initializes this module |
 | `@shutdown_fn` | No | string | Function that shuts down this module |
 | `@global_state` | No | block | Module-level mutable state. Format: `name: Type — description` |
+| `@engine` | No | enum | Dataflow framework this module targets (Tier 4): `langgraph`, `pipecat`, `lcel`, `langchain`, `crewai`, `autogen`, `custom`. The framework analog of `@lang`. |
+| `@checkpointer` | No | string | Persistence backend for agent/graph state (Tier 4). Format: `name — backend description`. |
 
 ---
 
@@ -154,6 +156,10 @@ Bounds appear in two places:
 | `Callback` | Effects depend on caller-provided function arguments. Cannot determine purity without inspecting inputs. |
 | `Async` | Suspends execution or yields the task scheduler (spawn, await, structured-concurrency scopes). |
 | `Ffi` | Calls a foreign function interface (C ABI, extern bindings). |
+| `Llm` | Invokes a language model. Implies cost, latency, and (usually) non-determinism. (Tier 4) |
+| `Tool` | Invokes model-selected tools. Concrete effects depend on which tools the model chooses. (Tier 4) |
+| `Embed` | Generates vector embeddings. (Tier 4) |
+| `Stream` | Emits incremental output (tokens, frames, streamed events) rather than a single value. (Tier 4) |
 
 ---
 
@@ -180,6 +186,20 @@ Bounds appear in two places:
 | `@related` | No | list | Related types and functions |
 | `@example` | No | block | Construction and usage |
 | `@error_categories` | No | list | Category traits implemented by this error type. Well-known values: `Transient`, `Permanent`, `UserFault`, `SystemFault`, `Retryable`. |
+| `@channels` | No | marker | (Tier 4) Marks this type as a reducer-merged state object. When present, `@fields` may carry `reducer:` constraints. See Reducer vocabulary. |
+
+### Reducer vocabulary (Tier 4)
+
+When a `@type` carries `@channels`, each field in `@fields` may declare how concurrent/sequential updates merge, via a `reducer:` constraint (e.g. `messages: [Message] — history. reducer: append.`).
+
+| Reducer | Merge behavior |
+|---------|----------------|
+| `last-wins` | New value replaces old (default if a `@channels` field omits `reducer:`) |
+| `append` | New items appended to the existing list |
+| `extend` | New list concatenated onto the existing list |
+| `add` | Numeric/aggregate addition (e.g. `operator.add`) |
+| `merge` | Dict/set union |
+| `custom:fn_name` | A named reducer function defines the merge |
 
 ### Kind values
 
@@ -247,6 +267,106 @@ Extractors populate `@error_categories` by detecting implementations of these tr
 | `@antipatterns` | No | block | Common mistakes to avoid |
 | `@variants` | No | block | Alternative paths through the workflow |
 | `@example` | No | block | Complete worked example |
+
+---
+
+## Tier 4: Agentic and dataflow fields
+
+See format.md Section 7 for the full treatment. These entry types describe agent frameworks (LangGraph, Pipecat, LangChain, etc.). Primitives are framework-agnostic; the `@engine` field names the framework (the analog of `@lang`).
+
+### Graph fields (`@graph`)
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `@graph` | Yes | string | Graph name (snake_case) |
+| `@purpose` | Yes | string | One-line description. Max 120 chars. |
+| `@engine` | No | enum | Framework: `langgraph`, `pipecat`, `lcel`, `crewai`, `autogen`, `custom` |
+| `@state` | No | string | Name of the `@type` (with `@channels`) holding shared state |
+| `@entry` | No | string/list | Entry node(s) reached from the reserved `START` source |
+| `@nodes` | Yes | block | Nodes. Per line: `name: fn — description [Effects]` |
+| `@edges` | No | block | Unconditional edges. Per line: `src -> dst`. A back-edge forms a cycle. For push engines: `src -> dst : FrameType [direction]` |
+| `@conditional_edges` | No | block | Routed edges. Per line: `src: router_fn -> a \| b \| END — condition` |
+| `@cycles` | No | block | Loops and their bound (recursion limit / max iterations) |
+| `@interrupts` | No | block | HITL pause points. Per line: `before\|after node — reason` |
+| `@composition` | No | enum | LCEL/Runnable operator: `sequence`, `parallel`, `branch`, `fallback`, `map` |
+| `@frames` | No | block | Push-based frame vocabulary. Per line: `FrameType — description. direction.` |
+| `@effects` | No | list | Aggregate side effects of running the graph |
+| `@antipatterns` | No | block | Mistakes when modifying/using the graph |
+| `@example` | No | block | Construction/compilation example |
+
+Reserved node names: `START` (source), `END` (terminal sink). Edge directions: `downstream`, `upstream`, `bidirectional`.
+
+### Tool fields (`@tool`)
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `@tool` | Yes | string | Tool name (the name the model sees) |
+| `@purpose` | Yes | string | One-line description — what the model reads to decide when to call. Max 120 chars. |
+| `@sig` | Yes | signature | Full signature (same syntax as `@fn`; accumulates for overloads) |
+| `@params` | Conditional | block | Parameter descriptions. Required if the tool has parameters. |
+| `@returns` | No | string | Return value description |
+| `@errors` | Conditional | block | Error conditions. Required if the tool can error. |
+| `@schema` | No | string | Path to the JSON-Schema the model sees (pointer, never inlined) |
+| `@invoked_by` | No | enum | `llm`, `agent`, or `code` |
+| `@effects` | No | list | Side effects (often includes `Tool`, `Net`, `Db`) |
+| `@determinism` | No | enum | `deterministic`, `nondeterministic`, `seeded` |
+| `@idempotent` | No | bool | Whether repeated calls with the same args are safe |
+| `@pre`, `@post`, `@related`, `@example` | No | — | As on `@fn` |
+
+### Agent fields (`@agent`)
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `@agent` | Yes | string | Agent name |
+| `@purpose` | Yes | string | One-line role description. Max 120 chars. |
+| `@model` | No | string | A `@model` name or inline model id |
+| `@system_prompt` | No | string | Path to the system prompt file (pointer — never inline prose) |
+| `@tools` | No | list | `@tool` names this agent may call |
+| `@handoffs` | No | list | Agents this agent can transfer control to |
+| `@autonomy` | No | enum | `autonomous`, `supervised`, `human-gated` |
+| `@guardrails` | No | block | Behavioral constraints. Bulleted, with `[src:]` references. |
+| `@memory` | No | enum | `none`, `thread`, `persistent` |
+| `@output` | No | string | Structured output type produced |
+| `@determinism` | No | enum | As above |
+| `@effects`, `@related`, `@example` | No | — | As on other entries |
+
+### Prompt fields (`@prompt`)
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `@prompt` | Yes | string | Prompt name |
+| `@purpose` | Yes | string | One-line description. Max 120 chars. |
+| `@inputs` | Conditional | block | Template input variables with constraints. Required if the template has variables. |
+| `@output` | No | string | Expected output shape (type, or `str` for free text) |
+| `@model` | No | string | Target model (`@model` name or inline id) |
+| `@template` | No | string | Path to the prompt template file (pointer, never inlined) |
+| `@determinism` | No | enum | As above |
+| `@failure_modes` | No | block | Known output failure modes with mitigations. Bulleted. |
+| `@example` | No | block | Minimal usage example |
+
+### Model fields (`@model`)
+
+| Field | Required | Type | Description |
+|-------|----------|------|-------------|
+| `@model` | Yes | string | Model handle (the name agents/prompts reference) |
+| `@purpose` | Yes | string | One-line description. Max 120 chars. |
+| `@provider` | No | string | `anthropic`, `openai`, `google`, `local`, etc. |
+| `@model_id` | No | string | Concrete model identifier (e.g. `claude-opus-4-8`) |
+| `@params` | No | string | Inference params: `temperature=…, max_tokens=…` |
+| `@structured_output` | No | string | Type the model is constrained to emit |
+| `@determinism` | No | enum | As above |
+| `@cost` | No | string | Approximate token cost |
+| `@effects` | No | list | Typically `[Llm, Net]` |
+
+### Determinism vocabulary (`@determinism`)
+
+Usable on `@fn`, `@tool`, `@prompt`, `@model`, `@agent`. Omission means determinism is unknown.
+
+| Value | Meaning |
+|-------|---------|
+| `deterministic` | Same input always yields the same output |
+| `nondeterministic` | Output may vary across runs (model sampling, tool index state, time) |
+| `seeded` | Deterministic given a fixed seed/temperature; varies otherwise |
 
 ---
 
@@ -422,8 +542,10 @@ AID-universal protocol names for `@implements`. These map to language-specific c
 | `Serializable` | Wire format conversion. | various | `json.Marshaler` | various | `Serialize` |
 | `Cloneable` | Independent copy. | `__copy__`/`__deepcopy__` | value types | `structuredClone` | `Clone` |
 | `Callable` | Invocable as function. | `__call__` | N/A | call signature | `Fn`/`FnMut` |
+| `Runnable` | Composable unit with invoke/stream/batch/async forms. (Tier 4) | LangChain `Runnable` | N/A | `Runnable` | N/A |
+| `Streamable` | Yields incremental results rather than a single value. (Tier 4) | `AsyncIterator` | channels | `AsyncIterable` | `Stream` |
 
-When an agent sees `@implements [Closeable]`, it should use the appropriate resource management syntax for the target language (e.g., `with` in Python, `defer x.Close()` in Go).
+When an agent sees `@implements [Closeable]`, it should use the appropriate resource management syntax for the target language (e.g., `with` in Python, `defer x.Close()` in Go). When it sees `@implements [Runnable]`, it can compose the unit with `|` / `RunnableParallel` (LangChain) or the engine's equivalent.
 
 ---
 

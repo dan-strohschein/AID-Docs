@@ -25,6 +25,7 @@ class Field_:
     description: str | None = None
     default: str | None = None
     constraints: str | None = None
+    reducer: str | None = None  # Tier 4: reducer for @channels state fields
 
 
 @dataclass
@@ -53,6 +54,8 @@ class ModuleHeader:
     deps: list[str] | None = None
     source: str | None = None
     aid_version: str = "0.2"
+    engine: str | None = None  # Tier 4: dataflow framework (langgraph, lcel, pipecat, ...)
+    checkpointer: str | None = None  # Tier 4: persistence backend
 
 
 @dataclass
@@ -92,6 +95,7 @@ class TypeEntry:
     invariants: list[str] | None = None
     constructors: str | None = None
     methods: list[str] | None = None
+    channels: bool = False  # Tier 4: reducer-merged state object
     extends: list[str] | None = None
     implements: list[str] | None = None
     generic_params: str | None = None
@@ -140,8 +144,60 @@ class Workflow:
     example: str | None = None
 
 
+@dataclass
+class ToolEntry:
+    """A Tier 4 @tool entry — an LLM-invocable function."""
+    name: str
+    purpose: str | None = None
+    sigs: list[str] = field(default_factory=list)
+    params: list[Param] | None = None
+    returns: str | None = None
+    errors: list[str] | None = None
+    effects: list[str] | None = None
+    invoked_by: str | None = None  # llm | agent | code
+    schema: str | None = None
+    determinism: str | None = None
+    idempotent: bool | None = None
+    source_file: str | None = None
+    source_line: int | None = None
+
+
+@dataclass
+class ModelEntry:
+    """A Tier 4 @model entry — a configured language model."""
+    name: str
+    purpose: str | None = None
+    provider: str | None = None
+    model_id: str | None = None
+    params: str | None = None
+    structured_output: str | None = None
+    determinism: str | None = None
+    effects: list[str] | None = None
+    source_file: str | None = None
+    source_line: int | None = None
+
+
+@dataclass
+class GraphEntry:
+    """A Tier 4 @graph entry — a dataflow topology."""
+    name: str
+    purpose: str | None = None
+    engine: str | None = None
+    state: str | None = None
+    entry: str | None = None
+    nodes: list[str] = field(default_factory=list)
+    edges: list[str] = field(default_factory=list)
+    conditional_edges: list[str] = field(default_factory=list)
+    cycles: list[str] | None = None
+    interrupts: list[str] | None = None
+    composition: str | None = None
+    effects: list[str] | None = None
+    source_file: str | None = None
+    source_line: int | None = None
+
+
 # Union of all entry types
-Entry = Union[FnEntry, TypeEntry, TraitEntry, ConstEntry]
+Entry = Union[FnEntry, TypeEntry, TraitEntry, ConstEntry, ToolEntry, ModelEntry, GraphEntry]
 
 
 @dataclass

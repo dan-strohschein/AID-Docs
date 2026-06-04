@@ -1,4 +1,4 @@
-# AID Format Specification v0.2
+# AID Format Specification v0.3
 
 **The complete specification for the Agent Interface Document format.**
 
@@ -12,14 +12,15 @@
 4. [Tier 2: Entries](#4-tier-2-entries)
 5. [Tier 2.5: Module annotations](#5-tier-25-module-annotations)
 6. [Tier 3: Workflows](#6-tier-3-workflows)
-7. [Syntax rules](#7-syntax-rules)
-8. [Parsing](#8-parsing)
-9. [Versioning](#9-versioning)
-10. [File organization](#10-file-organization)
-11. [Project file (`project.aid`)](#11-project-file-projectaid)
-12. [Examples](#12-examples)
-13. [Security considerations](#13-security-considerations)
-14. [Migration](#14-migration)
+7. [Tier 4: Agentic and dataflow constructs](#7-tier-4-agentic-and-dataflow-constructs)
+8. [Syntax rules](#8-syntax-rules)
+9. [Parsing](#9-parsing)
+10. [Versioning](#10-versioning)
+11. [File organization](#11-file-organization)
+12. [Project file (`project.aid`)](#12-project-file-projectaid)
+13. [Examples](#13-examples)
+14. [Security considerations](#14-security-considerations)
+15. [Migration](#15-migration)
 
 ---
 
@@ -111,6 +112,8 @@ The module header identifies the module and provides top-level metadata.
 | `@init_fn` | No | Function that initializes this module |
 | `@shutdown_fn` | No | Function that shuts down this module |
 | `@global_state` | No | Module-level mutable state |
+| `@engine` | No | Dataflow framework this module targets (Tier 4): `langgraph`, `pipecat`, `lcel`, `crewai`, `autogen`, `custom`. The framework analog of `@lang`. |
+| `@checkpointer` | No | Persistence backend for agent/graph state (Tier 4). Format: `name — backend description`. |
 
 ### 3.2 Test information
 
@@ -166,7 +169,7 @@ Modules with initialization or shutdown requirements:
 @source https://github.com/psf/requests
 @test_framework pytest
 @test_cmd pytest tests/unit/test_http_client.py
-@aid_version 0.2
+@aid_version 0.3
 ```
 
 ---
@@ -192,7 +195,7 @@ Functions are the most common entry type and carry the most information.
 | `@errors` | No* | Exhaustive list of error types and conditions. *Required if function can error. |
 | `@pre` | No | Preconditions that must hold before calling |
 | `@post` | No | Postconditions guaranteed after successful return |
-| `@effects` | No | Side effects: `[Net]`, `[Fs]`, `[Io]`, `[Env]`, `[Time]`, `[Random]`, `[Db]`, `[Process]`, `[Gpu]`, `[Callback]`, etc. |
+| `@effects` | No | Side effects: `[Net]`, `[Fs]`, `[Io]`, `[Env]`, `[Time]`, `[Random]`, `[Db]`, `[Process]`, `[Gpu]`, `[Callback]`, and the Tier 4 effects `[Llm]`, `[Tool]`, `[Embed]`, `[Stream]`, etc. |
 | `@calls` | No | Comma-separated list of functions this function calls internally |
 | `@thread_safety` | No | Concurrency safety. Structured keyword first, optional elaboration after. See Thread safety vocabulary. |
 | `@complexity` | No | Time and/or space complexity |
@@ -771,9 +774,348 @@ Maps errors to specific workflow steps so the agent knows exactly where error ha
 
 ---
 
-## 7. Syntax rules
+## 7. Tier 4: Agentic and dataflow constructs
 
-### 7.0 Omission vs explicit None
+Tiers 1–3 describe an API surface and the linear workflows that use it. Modern AI systems — agent frameworks like LangGraph, real-time pipelines like Pipecat, composition libraries like LangChain — are not linear API calls. They are **dataflow graphs**: nodes connected by edges, with conditional routing, **cycles**, shared mutable state that merges on update, model-driven tool selection, and non-deterministic behavior. None of these can be expressed with `@fn`/`@type` entries or with the strictly-sequential `@steps` of a `@workflow`.
+
+Tier 4 adds the constructs needed to make such a system fully comprehensible from its AID files alone: `@graph` (topology), state channels with reducers (shared state), `@tool` (model-invocable functions), `@agent` (autonomous actors), `@prompt` and `@model` (invocation contracts), the `@determinism` marker, and agentic effect tags.
+
+Every Tier 4 entry is a normal AID entry: it opens with a marker field and parses with the same line-by-line state machine (Section 9.3). No new parser states are required — only new entry keywords (Section 9.4).
+
+### 7.1 The `@engine` field
+
+Just as `@lang` makes type notation language-agnostic, `@engine` makes dataflow notation **framework-agnostic**. The Tier 4 primitives are universal; `@engine` tells tooling which framework's concepts they map to.
+
+```
+@engine langgraph | pipecat | lcel | langchain | crewai | autogen | custom
+```
+
+`@engine` appears on the module header (when a module is dedicated to one framework) and/or on individual `@graph`/`@agent` entries (when a module mixes engines). It is informational: an agent that understands the named framework can map nodes/edges/state to concrete APIs; an agent that doesn't still reads the universal topology. Unknown engine values are preserved, not rejected.
+
+### 7.2 Graph entries (`@graph`)
+
+A `@graph` describes a dataflow topology. Unlike a `@workflow` — which is a numbered sequence — a `@graph` has named nodes, directed edges, conditional routing, and may contain **cycles**.
+
+#### Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `@graph` | Yes | Graph name (snake_case) |
+| `@purpose` | Yes | One-line description. Max 120 characters. |
+| `@engine` | No | Framework this graph targets (see 7.1) |
+| `@state` | No | Name of the `@type` entry holding shared state (see 7.3) |
+| `@entry` | No | Name of the entry node(s) where execution begins. Reserved name: `START`. |
+| `@nodes` | Yes | The graph's nodes. One per line: `name: fn_or_runnable — description [Effects]` |
+| `@edges` | No | Unconditional directed edges. One per line: `src -> dst`. A back-edge forms a cycle. |
+| `@conditional_edges` | No | Routed edges. One per line: `src: router_fn -> targetA \| targetB \| END — condition` |
+| `@cycles` | No | Explicit call-out of loops and their bound (recursion limit / max iterations) |
+| `@interrupts` | No | Human-in-the-loop pause points. One per line: `before\|after node — reason` |
+| `@composition` | No | For Runnable/LCEL graphs: `sequence`, `parallel`, `branch`, `fallback`, `map` (see 7.2.3) |
+| `@frames` | No | For push-based engines (Pipecat): the frame vocabulary flowing through the graph (see 7.2.4) |
+| `@effects` | No | Aggregate side effects of running the graph |
+| `@antipatterns` | No | Common mistakes when modifying or using this graph |
+| `@example` | No | Minimal construction/compilation example |
+
+#### 7.2.1 Nodes, edges, and routing
+
+`END` is the reserved terminal sink — an edge to `END` ends that path. `START` is the reserved source; `@entry` names the node(s) reached from `START`.
+
+```
+@nodes
+  plan: planner_node — LLM selects the next action [Llm]
+  act: tool_executor — runs the selected tool [Tool]
+  observe: format_observation — folds the tool result into state
+@edges
+  act -> observe
+  observe -> plan
+@conditional_edges
+  plan: should_continue -> act | END — act if the last message has a tool call, else END
+```
+
+Each node line is `name: fn — description [Effects]`. The `fn` should match an entry in the file (`@fn`, `@tool`, or `@agent`); bare names resolve to the current module, qualified names (`module/path.Name`) to others (Section 8.7). `[Effects]` reuses the effect vocabulary (Section 7.9).
+
+Each `@edges` line is one directed edge `src -> dst`. A back-edge (an edge whose target appears earlier in the flow) creates a cycle — perfectly legal, and the thing a `@workflow` cannot express.
+
+Each `@conditional_edges` line names the source node, the **router function** that decides where to go, the `|`-separated set of possible targets, and the condition. This is how branching and loop-termination are expressed.
+
+#### 7.2.2 Cycles
+
+Cycles are the defining feature of agent graphs (an agent loops "reason → act → observe → reason" until done). Because an unbounded cycle is a hazard, `@cycles` states the loop and its bound explicitly:
+
+```
+@cycles
+  plan -> act -> observe -> plan — bounded by recursion_limit=25; raises GraphRecursionError if exceeded
+```
+
+An agent reading this knows the loop exists, what advances it toward termination (the `should_continue` router), and what happens at the bound. Omitting `@cycles` when a back-edge exists means "this graph has a cycle but its bound is undocumented" — treat with caution (Section 8.0).
+
+#### 7.2.3 Composition (LCEL / Runnable graphs)
+
+When a graph is a composition of Runnables rather than an explicitly-wired node graph (LangChain Expression Language), `@composition` names the operator and `@nodes`/`@edges` capture the linear or fan-out structure:
+
+| Operator | Meaning | LCEL |
+|----------|---------|------|
+| `sequence` | Output of each stage feeds the next | `a \| b \| c` |
+| `parallel` | Run branches concurrently, collect into a dict | `RunnableParallel` |
+| `branch` | Route to one branch by predicate | `RunnableBranch` |
+| `fallback` | Try primary, fall back on error | `.with_fallbacks([...])` |
+| `map` | Apply to each element of an input list | `.map()` |
+
+```
+@graph rag_chain
+@purpose Retrieval-augmented generation: fetch context, prompt, generate, parse
+@engine lcel
+@composition sequence
+@nodes
+  retrieve: vector_search — fetch top-k context chunks [Embed, Net]
+  prompt: rag_prompt — fill the prompt template
+  generate: chat_model — call the LLM [Llm, Stream]
+  parse: output_parser — coerce to structured output
+@edges
+  retrieve -> prompt
+  prompt -> generate
+  generate -> parse
+```
+
+#### 7.2.4 Push-based graphs and frames (Pipecat)
+
+Real-time pipelines push typed **frames** between processors, bidirectionally. For `@engine pipecat`, edges carry a frame type and a direction, and `@frames` declares the frame vocabulary:
+
+```
+@graph voice_loop
+@purpose Real-time voice assistant: audio in → transcribe → LLM → speak
+@engine pipecat
+@frames
+  AudioRawFrame — raw PCM audio chunks. downstream.
+  TranscriptionFrame — recognized text from STT. downstream.
+  TextFrame — LLM output text. downstream.
+  StartInterruptionFrame — user barge-in signal. upstream.
+@nodes
+  transport_in: WebRTCInput — receives mic audio [Net, Stream]
+  stt: DeepgramSTT — speech-to-text [Llm, Net, Stream]
+  llm: OpenAILLM — generates response [Llm, Net, Stream]
+  tts: CartesiaTTS — text-to-speech [Net, Stream]
+  transport_out: WebRTCOutput — plays audio [Net, Stream]
+@edges
+  transport_in -> stt : AudioRawFrame [downstream]
+  stt -> llm : TranscriptionFrame [downstream]
+  llm -> tts : TextFrame [downstream]
+  tts -> transport_out : AudioRawFrame [downstream]
+  transport_out -> llm : StartInterruptionFrame [upstream]
+```
+
+Each `@frames` line is `FrameType — description. direction.` where direction is `downstream`, `upstream`, or `bidirectional`. Edge annotations `: FrameType [direction]` say which frame travels which way along that connection.
+
+### 7.3 State channels and reducers
+
+LangGraph (and similar) state is a data object whose fields **merge** on each node update rather than being overwritten. A node returning `{"messages": [m]}` *appends* to `messages` if its reducer is append-based. AID expresses this by marking a `@type` with `@channels` and annotating each field with a `reducer:` constraint.
+
+```
+@type AgentState
+@kind struct
+@channels
+@purpose Shared state threaded through every node of agent_loop
+@fields
+  messages: [Message] — conversation history. reducer: append.
+  step_count: int — loop counter. reducer: increment. Default 0.
+  next: str — routing decision written by the planner. reducer: last-wins.
+```
+
+| Reducer | Merge behavior |
+|---------|----------------|
+| `last-wins` | New value replaces old (default if a `@channels` field omits `reducer:`) |
+| `append` | New items appended to the existing list |
+| `extend` | New list concatenated onto the existing list |
+| `add` | Numeric/aggregate addition (e.g. `operator.add`) |
+| `merge` | Dict/set union |
+| `custom:fn_name` | A named reducer function defines the merge |
+
+`@channels` is an opt-in marker: a `@type` without it uses ordinary assignment semantics. `reducer:` is a constraint keyword in the `@fields` block, reusing the existing field-constraint syntax (Section 8) — no new block type. Knowing a field's reducer is essential for correct code: a node that returns the whole `messages` list when the reducer is `append` will duplicate history.
+
+### 7.4 Tool entries (`@tool`)
+
+A `@tool` is a function exposed to a model, which decides when to call it. Structurally it is an `@fn` plus tool-call metadata; it is a distinct entry type because "the model may invoke this autonomously" is a load-bearing fact an agent must know.
+
+#### Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `@tool` | Yes | Tool name (the name the model sees) |
+| `@purpose` | Yes | One-line description. This is what the model reads to decide when to call. Max 120 chars. |
+| `@sig` | Yes | Full type signature (same syntax as `@fn`) |
+| `@params` | No* | Parameter descriptions. *Required if the tool has parameters. |
+| `@returns` | No | Return value description |
+| `@errors` | No* | Error conditions. *Required if the tool can error. |
+| `@schema` | No | Path to the JSON-Schema the model sees (a pointer, never inlined) |
+| `@invoked_by` | No | `llm`, `agent`, or `code` — who calls this tool |
+| `@effects` | No | Side effects (reuse vocabulary, including `Tool`, `Net`, `Db`) |
+| `@determinism` | No | `deterministic`, `nondeterministic`, `seeded` (see 7.8) |
+| `@idempotent` | No | `true`/`false` — whether repeated calls with the same args are safe |
+| `@determinism`, `@pre`, `@post`, `@related`, `@example` | No | As on `@fn` |
+
+```
+@tool web_search
+@purpose Search the web and return ranked results. Use for current events or unknown facts.
+@sig (query: str, k?: int) -> [SearchResult] ! SearchError
+@params
+  query: Search query. Required.
+  k: Number of results. Default 5. Range [1, 20].
+@returns Ranked list of results with title, url, snippet
+@errors
+  SearchError.RateLimited — provider quota exceeded [origin]
+  SearchError.Network — upstream request failed [origin]
+@schema tools/web_search.schema.json
+@invoked_by llm
+@effects [Net, Tool]
+@determinism nondeterministic — results vary with index state
+@idempotent true
+```
+
+### 7.5 Agent entries (`@agent`)
+
+An `@agent` is an autonomous actor: a model plus a system prompt, a set of tools it may call, guardrails on its behavior, and optionally the ability to hand off to other agents.
+
+#### Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `@agent` | Yes | Agent name |
+| `@purpose` | Yes | One-line description of the agent's role. Max 120 chars. |
+| `@model` | No | Name of a `@model` entry, or an inline model id |
+| `@system_prompt` | No | Path to the system prompt file (a pointer — never inline prose) |
+| `@tools` | No | Tools this agent may call. List of `@tool` names. |
+| `@handoffs` | No | Other agents this agent can transfer control to (multi-agent / swarm) |
+| `@autonomy` | No | `autonomous`, `supervised`, or `human-gated` |
+| `@guardrails` | No | Behavioral constraints. Bulleted, with `[src:]` references. |
+| `@memory` | No | `none`, `thread`, or `persistent` (see 7.10) |
+| `@output` | No | Structured output type the agent produces |
+| `@determinism` | No | As in 7.8 |
+| `@effects`, `@related`, `@example` | No | As on other entries |
+
+```
+@agent researcher
+@purpose Gathers and summarizes web sources on a topic
+@model planner_llm
+@system_prompt prompts/researcher.md
+@tools [web_search, fetch_url]
+@handoffs [writer, critic]
+@autonomy supervised
+@guardrails
+  - Never fabricate citations; every claim links to a fetched source [src: agents/researcher.py:40-55]
+  - At most 10 tool calls per task [src: agents/researcher.py:22]
+@memory thread
+@output ResearchReport
+@effects [Llm, Tool, Net]
+```
+
+### 7.6 Prompt entries (`@prompt`)
+
+A `@prompt` is a templated model invocation treated as a contract: declared inputs, an expected output shape, the model it targets, and its known failure modes. The prompt text itself lives in a file referenced by `@template` — it is never inlined (prompts are prose, and Tier 4 keeps prose out of AID).
+
+#### Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `@prompt` | Yes | Prompt name |
+| `@purpose` | Yes | One-line description. Max 120 chars. |
+| `@inputs` | No* | Template input variables, with constraints. *Required if the template has variables. |
+| `@output` | No | Expected output shape (type, or `str` for free text) |
+| `@model` | No | Target model (`@model` name or inline id) |
+| `@template` | No | Path to the prompt template file (pointer, never inlined) |
+| `@determinism` | No | As in 7.8 |
+| `@failure_modes` | No | Known ways the model output goes wrong, with mitigations. Bulleted. |
+| `@example` | No | Minimal usage example |
+
+```
+@prompt extract_entities
+@purpose Extract named entities from text as a JSON array
+@inputs
+  text: str — source document. Required. Length [1, 20000].
+@output [Entity] — validated against the Entity type
+@model gpt-4o-mini
+@template prompts/extract_entities.j2
+@determinism nondeterministic. temperature=0 reduces variance but does not eliminate it.
+@failure_modes
+  - May emit malformed JSON — wrap the parse in a retry with repair
+  - May hallucinate entities absent from the text — validate every entity against the source span
+```
+
+### 7.7 Model entries (`@model`)
+
+A `@model` declares a configured language model: provider, model id, parameters, and whether it produces structured output. Agents and prompts reference it by name.
+
+#### Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `@model` | Yes | Model handle (the name agents/prompts reference) |
+| `@purpose` | Yes | One-line description. Max 120 chars. |
+| `@provider` | No | `anthropic`, `openai`, `google`, `local`, etc. |
+| `@model_id` | No | Concrete model identifier (e.g. `claude-opus-4-8`) |
+| `@params` | No | Inference parameters: `temperature=…, max_tokens=…`, etc. |
+| `@structured_output` | No | Type the model is constrained to emit (forces schema/tool-format output) |
+| `@determinism` | No | As in 7.8 |
+| `@cost` | No | Approximate token cost, e.g. `input≈$3/Mtok, output≈$15/Mtok` |
+| `@effects` | No | Typically `[Llm, Net]` |
+
+```
+@model planner_llm
+@purpose LLM used for the planning step of agent_loop
+@provider anthropic
+@model_id claude-opus-4-8
+@params temperature=0.0, max_tokens=4096
+@structured_output AgentDecision
+@determinism nondeterministic
+@cost input≈$3/Mtok, output≈$15/Mtok
+@effects [Llm, Net]
+```
+
+### 7.8 Determinism (`@determinism`)
+
+Agentic units are frequently **non-deterministic**: the same input can produce different output across runs. This is first-class information — it tells an agent that tests must assert on *properties* (schema-valid, non-empty, contains a citation) rather than exact strings, and that retries/guardrails are warranted.
+
+`@determinism` may appear on `@fn`, `@tool`, `@prompt`, `@model`, and `@agent`:
+
+| Value | Meaning |
+|-------|---------|
+| `deterministic` | Same input always yields the same output |
+| `nondeterministic` | Output may vary across runs (model sampling, tool index state, time) |
+| `seeded` | Deterministic given a fixed seed/temperature; varies otherwise |
+
+Omission means determinism is unknown (Section 8.0) — an agent should not assume reproducibility.
+
+### 7.9 Agentic effect tags
+
+Tier 4 adds effect categories to the vocabulary used by `@effects` and node annotations (the full table is in `fields.md`):
+
+| Effect | Meaning |
+|--------|---------|
+| `Llm` | Invokes a language model — implies cost, latency, and (usually) non-determinism |
+| `Tool` | Invokes model-selected tools; concrete effects depend on which tools are chosen |
+| `Embed` | Generates vector embeddings |
+| `Stream` | Emits incremental output (tokens, frames, streamed events) rather than a single value |
+
+These compose with existing effects (`Net`, `Db`, `Async`, `Callback`). A streaming LLM node is `[Llm, Net, Stream]`.
+
+### 7.10 Runtime semantics: memory, checkpointing, interrupts, streaming
+
+**Memory and checkpointing.** Agents and graphs that persist state across turns declare it with `@memory` (`none` / `thread` / `persistent`). The persistence backend is declared once on the module header with `@checkpointer`:
+
+```
+@checkpointer postgres — LangGraph PostgresSaver; threads keyed by thread_id
+```
+
+`thread` memory means state is scoped to a `thread_id` and survives across invocations within that thread. `persistent` means it outlives the process (durable store). `none` means each invocation starts fresh.
+
+**Interrupts (human-in-the-loop).** Pause points are declared on the graph via `@interrupts` (Section 7.2). An interrupt suspends execution before/after a node so a human can inspect or approve state, then resume. This is how approval gates for destructive tools are made visible.
+
+**Streaming.** A unit that yields partial results carries the `[Stream]` effect (Section 7.9). For push-based engines, frame direction (Section 7.2.4) describes the streaming topology. An agent generating a consumer of a streaming unit knows to iterate/await chunks rather than expect a single return value.
+
+---
+
+## 8. Syntax rules
+
+### 8.0 Omission vs explicit None
 
 For any optional field, there is a semantic distinction between omission and an explicit value of `None`:
 
@@ -784,7 +1126,7 @@ This distinction applies to: `@pre`, `@post`, `@errors`, `@effects`, `@thread_sa
 
 Example: `@pre None` means "this function has no preconditions — verified." A missing `@pre` means "preconditions are unknown — be cautious."
 
-### 7.1 Field syntax
+### 8.1 Field syntax
 
 All fields start with `@` at the beginning of a line:
 
@@ -802,7 +1144,7 @@ Or for multi-line fields:
 
 Multi-line field content is indented by 2 spaces. The field ends when the next `@field`, `---`, or end-of-file is encountered.
 
-### 7.2 Comments
+### 8.2 Comments
 
 Lines starting with `//` are comments and are ignored by parsers:
 
@@ -814,11 +1156,11 @@ Lines starting with `//` are comments and are ignored by parsers:
   ...
 ```
 
-### 7.3 Entry separators
+### 8.3 Entry separators
 
 Entries are separated by `---` on its own line (no leading/trailing whitespace).
 
-### 7.4 Inline descriptions
+### 8.4 Inline descriptions
 
 Within field values, `—` (em dash) separates a name from its description:
 
@@ -827,7 +1169,7 @@ Within field values, `—` (em dash) separates a name from its description:
   status: int — HTTP status code. Range [100, 599].
 ```
 
-### 7.5 Source references
+### 8.5 Source references
 
 Layer 2 (AI-generated) semantic claims must be linked to the source code that supports them using `[src:]` references:
 
@@ -847,7 +1189,7 @@ Source reference syntax:
 
 Paths are relative to the project root. Line numbers reference the code version in `@code_version`. Source references enable **mechanical verification** — a reviewer agent reads the referenced code and confirms the claim.
 
-### 7.6 Lists
+### 8.6 Lists
 
 Lists within fields use comma-separated values in brackets:
 
@@ -857,7 +1199,7 @@ Lists within fields use comma-separated values in brackets:
 @implements [Display, Debug, Clone]
 ```
 
-### 7.7 Cross-module references
+### 8.7 Cross-module references
 
 Any field that references another entry (`@related`, `@depends`, `@implements`, `@extends`, `@implementors`, `@constructors`) supports both bare and qualified names.
 
@@ -888,7 +1230,7 @@ Qualified names are only required for cross-module references. Bare names always
 @related get, post, http/types.Headers
 ```
 
-### 7.8 Sub-fields
+### 8.8 Sub-fields
 
 Nested properties within parameters use `.` prefix with additional indentation:
 
@@ -899,7 +1241,7 @@ Nested properties within parameters use `.` prefix with additional indentation:
     .redirects: int. Default 5. Range [0, 20].
 ```
 
-### 7.9 Type notation
+### 8.9 Type notation
 
 AID uses a universal type notation that maps to any source language:
 
@@ -922,7 +1264,7 @@ AID uses a universal type notation that maps to any source language:
 
 These are AID-universal types. The `@lang` field in the header tells tooling how to map them to language-specific types.
 
-### 7.10 Inheritance (`@extends`)
+### 8.10 Inheritance (`@extends`)
 
 Types that inherit from a parent class use `@extends` to declare the relationship:
 
@@ -942,7 +1284,7 @@ For multiple inheritance (Python, C++):
 
 For languages without class inheritance (Go, Rust), `@extends` is not used. Use `@implements` for interface/trait satisfaction and composition for embedding.
 
-### 7.11 Platform-specific behavior (`@platform`)
+### 8.11 Platform-specific behavior (`@platform`)
 
 When a function or type behaves differently across operating systems or platforms, use `@platform` to document the differences:
 
@@ -966,7 +1308,7 @@ If a function is only available on certain platforms:
   macos: Available.
 ```
 
-### 7.12 Well-known protocols
+### 8.12 Well-known protocols
 
 The `@implements` field accepts both language-specific names and AID-universal protocol names. Universal protocol names describe behavioral contracts that exist across languages under different names:
 
@@ -994,11 +1336,11 @@ When a type implements `Closeable`, an agent knows to use the language-appropria
 
 ---
 
-## 8. Parsing
+## 9. Parsing
 
 An AID parser is a line-by-line state machine. No lookahead, no backtracking, no context-dependent rules. Each line is classified by its prefix, and the parser transitions between states accordingly.
 
-### 8.1 Line classification
+### 9.1 Line classification
 
 Every line in an AID file is exactly one of these types:
 
@@ -1012,7 +1354,7 @@ Every line in an AID file is exactly one of these types:
 
 No line can be ambiguous — the first character(s) determine its type.
 
-### 8.2 Parsing rules
+### 9.2 Parsing rules
 
 1. **Read line by line.** Trim trailing whitespace. Classify each line by its prefix.
 2. **Skip comments and blanks.** They carry no semantic content.
@@ -1030,7 +1372,7 @@ No line can be ambiguous — the first character(s) determine its type.
 6. **On end-of-file:**
    - Close the current entry. Parsing is complete.
 
-### 8.3 State machine
+### 9.3 State machine
 
 ```
 States: HEADER, ENTRY, FIELD_VALUE, DONE
@@ -1050,7 +1392,7 @@ States: HEADER, ENTRY, FIELD_VALUE, DONE
 | FIELD_VALUE | Comment/Blank | Skip | FIELD_VALUE |
 | Any | EOF | Finalize current entry/header | DONE |
 
-### 8.4 Output structure
+### 9.4 Output structure
 
 A parsed AID file produces:
 
@@ -1064,7 +1406,8 @@ AidFile {
   },
   entries: [
     {
-      kind: "fn" | "type" | "trait" | "const",
+      kind: "fn" | "type" | "trait" | "const"
+          | "graph" | "tool" | "agent" | "prompt" | "model",
       name: str,
       fields: { field_name: str | [str] }
     },
@@ -1080,35 +1423,37 @@ AidFile {
 }
 ```
 
-Entries are distinguished from workflows by their opening field: `@fn`, `@type`, `@trait`, `@const` produce entries; `@workflow` produces workflows. In `project.aid` files, `@cross_cutting`, `@convention`, `@lifecycle`, and `@decision` also start entries.
+Entries are distinguished from workflows by their opening field: `@fn`, `@type`, `@trait`, `@const`, and the Tier 4 keywords `@graph`, `@tool`, `@agent`, `@prompt`, `@model` produce entries; `@workflow` produces workflows. In `project.aid` files, `@cross_cutting`, `@convention`, `@lifecycle`, and `@decision` also start entries. A parser treats any unrecognized entry-opening keyword as a generic entry (kind = the keyword) so that forward-compatible files still parse.
 
-### 8.5 Error handling
+### 9.5 Error handling
 
 Parsers should be lenient:
 - **Unknown fields:** Ignore them. Forward compatibility requires this.
 - **Missing required fields:** Warn but don't reject. Partial AID files are valid.
 - **Malformed lines:** Skip with a warning. One bad line should not invalidate the file.
-- **Duplicate fields:** Last value wins. Warn on duplicates. **Exception:** accumulating fields (see 8.6).
+- **Duplicate fields:** Last value wins. Warn on duplicates. **Exception:** accumulating fields (see 9.6).
 
-### 8.6 Accumulating fields
+### 9.6 Accumulating fields
 
 Most fields follow the "last value wins" rule — if `@purpose` appears twice, the second value overwrites the first. However, some fields are **accumulating**: multiple occurrences are collected into a list rather than overwriting.
 
 Accumulating fields:
-- **`@sig`** — Multiple signatures represent overloaded calling conventions. Each `@sig` line is a valid way to call the function.
+- **`@sig`** — Multiple signatures represent overloaded calling conventions. Each `@sig` line is a valid way to call the function. Also accumulates on `@tool` entries (tools can be overloaded like functions).
 - **`@rule`** — Multiple rules on a `@convention` entry are collected into an ordered list.
 
 Parsers must implement accumulation for these fields. All other fields use last-value-wins. If a future spec version adds accumulating fields, they will be explicitly listed here.
 
+Note on Tier 4: `@nodes`, `@edges`, `@conditional_edges`, `@guardrails`, `@failure_modes`, and `@frames` are **multi-line block fields**, not accumulating fields — their content is the set of indented continuation lines under a single field occurrence, parsed exactly like `@params` or `@steps`.
+
 ---
 
-## 9. Versioning
+## 10. Versioning
 
-### 9.1 AID spec versioning
+### 10.1 AID spec versioning
 
 The AID format itself is versioned using semantic versioning. The `@aid_version` field in the module header declares which spec version the file conforms to.
 
-### 9.2 Library versioning
+### 10.2 Library versioning
 
 The `@version` field tracks which version of the documented library the AID file describes. When a library updates its API:
 
@@ -1116,15 +1461,15 @@ The `@version` field tracks which version of the documented library the AID file
 - Changed signatures: update the entry, add `@since` to note the change
 - Removed APIs: mark with `@deprecated` before removal, then remove in next major version
 
-### 9.3 Backwards compatibility
+### 10.3 Backwards compatibility
 
 New fields may be added to the AID spec in minor versions. Parsers must ignore unknown fields. Fields will not be removed or have their semantics changed except in major versions.
 
 ---
 
-## 10. File organization
+## 11. File organization
 
-### 10.1 Naming convention
+### 11.1 Naming convention
 
 ```
 module-name.aid
@@ -1137,7 +1482,7 @@ Examples:
 - `os-path.aid` for `os.path`
 - `std-collections.aid` for `std/collections`
 
-### 10.2 Directory structure
+### 11.2 Directory structure
 
 For a library with multiple modules:
 
@@ -1151,11 +1496,11 @@ For a library with multiple modules:
 
 AID files live in a `.aidocs/` directory at the project root, or in a central registry for third-party libraries.
 
-### 10.3 One file per module
+### 11.3 One file per module
 
 Each `.aid` file documents exactly one module. This keeps files at a manageable size (typically under 2,000 tokens) and allows agents to load only what they need.
 
-### 10.4 Manifest file
+### 11.4 Manifest file
 
 Large projects (20+ packages) should include a `.aidocs/manifest.aid` file that indexes all AID files. The manifest lets agents identify relevant packages from a task description without opening every AID file.
 
@@ -1197,7 +1542,7 @@ Large projects (20+ packages) should include a `.aidocs/manifest.aid` file that 
 
 **Agent workflow:** Read manifest first. Identify relevant packages by matching the task description against `@purpose` fields. Load only those AID files plus their `@depends` chain. This prevents the token bloat seen in benchmarks when all AID files are loaded indiscriminately.
 
-### 10.4.1 Project snapshot
+### 11.4.1 Project snapshot
 
 The manifest header may include a **project snapshot** — a compressed, canonical representation of the project's shape and recent changes. The snapshot gives an agent full project orientation in a single read, without loading any individual AID files.
 
@@ -1328,7 +1673,7 @@ Snapshots should be auto-generated by tooling, not manually maintained. The gene
 
 The `@shape` block may be seeded automatically and refined by a human or L2 agent. The structured fields (`@entry_points`, `@key_types`, `@snapshot_version`, `@delta`) are fully automatable.
 
-### 10.5 Discovery protocol
+### 11.5 Discovery protocol
 
 When an agent or tool needs to find AID files, it follows this discovery chain:
 
@@ -1344,7 +1689,7 @@ The first `.aidocs/` directory found wins. Tools should not search multiple `.ai
 
 ---
 
-## 11. Project file (`project.aid`)
+## 12. Project file (`project.aid`)
 
 Large projects benefit from project-level documentation that spans all modules. While `manifest.aid` indexes individual modules, `project.aid` captures architectural context, cross-cutting concerns, conventions, and lifecycle information that no single module owns.
 
@@ -1352,7 +1697,7 @@ Large projects benefit from project-level documentation that spans all modules. 
 
 **Co-evolution with `manifest.aid`:** When both files exist, they must stay consistent. Modules referenced in `project.aid` `@modules` lists should exist in `manifest.aid`. When `manifest.aid` adds or removes packages, `project.aid` `@layers`, `@boundaries`, and `@cross_cutting` entries may need updating. The `aid-validate` tool should warn on references to modules that don't exist in the manifest.
 
-### 11.1 Project header
+### 12.1 Project header
 
 | Field | Required | Description |
 |-------|----------|-------------|
@@ -1414,7 +1759,7 @@ Module ownership. Format: `module_glob: team/person`.
   server/*: @platform-team
 ```
 
-### 11.2 Cross-cutting concern entries (`@cross_cutting`)
+### 12.2 Cross-cutting concern entries (`@cross_cutting`)
 
 Cross-cutting concerns document patterns that span multiple modules — authentication flows, error handling strategy, observability, middleware chains. They are the project-level equivalent of `@workflow`.
 
@@ -1453,7 +1798,7 @@ Cross-cutting concerns document patterns that span multiple modules — authenti
   - Don't pass user as a function parameter. Use context.
 ```
 
-### 11.3 Convention entries (`@convention`)
+### 12.3 Convention entries (`@convention`)
 
 Conventions document project-wide coding standards that new code must follow. These capture the knowledge agents need to write code that fits the existing codebase.
 
@@ -1484,7 +1829,7 @@ Conventions document project-wide coding standards that new code must follow. Th
 
 Note: `@rule` is an accumulating field — multiple `@rule` lines on the same entry are collected into a list, not overwritten. This follows the same pattern as `@sig` on overloaded functions.
 
-### 11.4 Lifecycle entries (`@lifecycle`)
+### 12.4 Lifecycle entries (`@lifecycle`)
 
 Lifecycle entries document initialization, shutdown, and other lifecycle sequences.
 
@@ -1513,11 +1858,11 @@ Lifecycle entries document initialization, shutdown, and other lifecycle sequenc
 @timeout 30s
 ```
 
-### 11.5 Decision entries
+### 12.5 Decision entries
 
 `@decision` entries may also appear in `project.aid` for project-level architectural decisions (same syntax as module-level decisions in Section 5.3).
 
-### 11.6 Full `project.aid` example
+### 12.6 Full `project.aid` example
 
 ```
 @project SyndrDB
@@ -1614,9 +1959,9 @@ Lifecycle entries document initialization, shutdown, and other lifecycle sequenc
 
 ---
 
-## 12. Examples
+## 13. Examples
 
-### 12.1 Example blocks
+### 13.1 Example blocks
 
 The `@example` field on entries contains minimal usage examples. Rules:
 
@@ -1641,13 +1986,13 @@ The `@example` field on entries contains minimal usage examples. Rules:
   err = resp.JSON(&data)
 ```
 
-### 12.2 When to include examples
+### 13.2 When to include examples
 
 Layer 1 extractors should only include examples from existing docstrings. Layer 2 generators may synthesize examples when the usage pattern is non-obvious — especially for workflows and entries with complex constraints.
 
 ---
 
-## 13. Security considerations
+## 14. Security considerations
 
 AID files are documentation artifacts. They carry the same trust level as the source code they describe.
 
@@ -1658,17 +2003,17 @@ AID files are documentation artifacts. They carry the same trust level as the so
 
 ---
 
-## 14. Migration
+## 15. Migration
 
-### 14.1 Spec version compatibility
+### 15.1 Spec version compatibility
 
 The `@aid_version` field declares which AID spec version the file targets. Compatibility rules:
 
 - **Parsers must handle older spec versions gracefully.** Unknown fields are ignored (forward compatibility). Missing new fields use defaults.
-- **Minor version changes are additive only.** New fields may be added; existing fields retain their semantics. AID 0.1 files are valid AID 0.2 files.
+- **Minor version changes are additive only.** New fields may be added; existing fields retain their semantics. AID 0.1 files are valid AID 0.2 files, and AID 0.2 files are valid AID 0.3 files. The v0.3 Tier 4 additions (`@graph`, `@tool`, `@agent`, `@prompt`, `@model`, state channels/reducers, the `@engine`/`@determinism` fields, and the `Llm`/`Tool`/`Embed`/`Stream` effects) introduce no breaking changes — a 0.2 parser ignores the new entry keywords and fields, and a 0.3 parser reads 0.2 files unchanged.
 - **Breaking changes require a major version bump.** Field semantics may change or fields may be removed only in major versions (0.x → 1.0 allows breaking changes, since pre-1.0 is unstable).
 
-### 14.2 Updating AID files
+### 15.2 Updating AID files
 
 When the spec changes, existing AID files are updated by re-running the generation pipeline:
 

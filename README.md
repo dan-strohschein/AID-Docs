@@ -16,6 +16,7 @@ AID fixes this by providing:
 - **Explicit constraints** — parameter ranges, preconditions, postconditions, invariants
 - **Exhaustive errors** — every error variant and the exact condition that triggers it
 - **Workflow patterns** — how APIs work together as sequences, not just individually
+- **Agentic dataflow (Tier 4)** — graphs, cycles, state channels, tools, agents, prompts, and models for systems built on LangGraph, Pipecat, LangChain, and similar frameworks
 - **Zero prose** — every piece of information has a named field with defined semantics
 
 ## Quick example
@@ -311,17 +312,20 @@ AID/
 ├── README.md                  # This file
 ├── CLAUDE.md                  # AI assistant guide for this project
 ├── spec/
-│   ├── format.md              # The AID format specification (13 sections)
-│   ├── fields.md              # Complete field reference (92 fields)
-│   ├── design-rationale.md    # Why every design decision was made (31 entries)
+│   ├── format.md              # The AID format specification (15 sections, v0.3)
+│   ├── fields.md              # Complete field reference
+│   ├── design-rationale.md    # Why every design decision was made
 │   ├── generation.md          # How AID files are generated from source code
 │   └── layer2.md              # Layer 2: AI-generated semantic docs with verification
 ├── examples/
 │   ├── http-client.aid        # HTTP client module example
 │   ├── collections-hashmap.aid # Generic collections example
-│   └── events-emitter.aid     # Async/callback patterns example
+│   ├── events-emitter.aid     # Async/callback patterns example
+│   ├── langgraph-react-agent.aid # Tier 4: LangGraph agent (graph, cycles, tools, state)
+│   ├── pipecat-voice-bot.aid  # Tier 4: Pipecat real-time pipeline (frames, streaming)
+│   └── langchain-rag.aid      # Tier 4: LangChain LCEL composition (prompt, model, RAG)
 └── tools/
-    ├── aid-gen/               # Python L1 extractor (99 tests)
+    ├── aid-gen/               # Python L1 extractor (incl. LangGraph/LangChain)
     ├── aid-gen-go/            # Go L1 extractor
     ├── aidkit/                # Go toolkit: parser (19 tests), validator (20 tests),
     │                          #   emitter (6 tests), discovery, L2 pipeline

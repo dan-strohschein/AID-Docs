@@ -1,0 +1,146 @@
+@module voice/assistant
+@lang python
+@version 0.1.0
+@stability experimental
+@purpose Real-time voice assistant pipeline: mic audio → transcribe → LLM → speak, with barge-in
+@engine pipecat
+@depends [pipecat, pipecat.services.deepgram, pipecat.services.openai, pipecat.services.cartesia]
+@source https://github.com/example/voice-bot
+@aid_version 0.3
+
+---
+
+@type AudioRawFrame
+@kind struct
+@purpose A chunk of raw PCM audio flowing through the pipeline
+@fields
+  audio: bytes — PCM samples.
+  sample_rate: int — Samples per second. One of: 8000, 16000, 24000.
+  num_channels: int — Channel count. Default 1.
+@extends Frame
+@implements [Serializable]
+
+---
+
+@type TranscriptionFrame
+@kind struct
+@purpose Recognized text emitted by the STT service
+@fields
+  text: str — Transcribed utterance.
+  is_final: bool — Whether the transcription is finalized or interim.
+@extends Frame
+
+---
+
+@type WebRTCInput
+@kind class
+@purpose Transport processor that receives microphone audio from a WebRTC peer
+@constructors WebRTCInput(connection) — created with an established peer connection
+@methods process_frame
+@implements [Streamable]
+@extends FrameProcessor
+
+---
+
+@type DeepgramSTT
+@kind class
+@purpose Streaming speech-to-text service; consumes audio, emits transcriptions
+@constructors DeepgramSTT(api_key, model) — configured from DEEPGRAM_API_KEY
+@methods process_frame
+@implements [Streamable]
+@extends FrameProcessor
+
+---
+
+@type OpenAILLM
+@kind class
+@purpose Streaming LLM service; consumes transcribed text, emits response text tokens
+@constructors OpenAILLM(api_key, model) — configured from OPENAI_API_KEY
+@methods process_frame
+@implements [Streamable]
+@extends FrameProcessor
+
+---
+
+@type CartesiaTTS
+@kind class
+@purpose Streaming text-to-speech; consumes text, emits audio frames
+@constructors CartesiaTTS(api_key, voice_id) — configured from CARTESIA_API_KEY
+@methods process_frame
+@implements [Streamable]
+@extends FrameProcessor
+
+---
+
+@fn FrameProcessor.process_frame
+@purpose Handle one frame and push results to the next processor in the configured direction
+@sig async (mut self, frame: Frame, direction: FrameDirection) -> None
+@params
+  frame: The frame to process. Required.
+  direction: DOWNSTREAM (toward output) or UPSTREAM (toward input). Required.
+@returns None — results are pushed via self.push_frame, not returned
+@effects [Async, Stream]
+@thread_safety not-safe. A processor instance handles frames serially on the pipeline task.
+@determinism nondeterministic
+@example
+  async def process_frame(self, frame, direction):
+      if isinstance(frame, TranscriptionFrame):
+          await self.push_frame(LLMMessagesFrame([...]), FrameDirection.DOWNSTREAM)
+      else:
+          await self.push_frame(frame, direction)
+
+---
+
+@graph voice_loop
+@purpose Real-time voice assistant with bidirectional frame flow and user barge-in
+@engine pipecat
+@frames
+  AudioRawFrame — raw PCM audio chunks. downstream.
+  TranscriptionFrame — recognized text from STT. downstream.
+  TextFrame — LLM output text tokens. downstream.
+  StartInterruptionFrame — user barge-in signal; cancels in-flight TTS/LLM. upstream.
+@nodes
+  transport_in: WebRTCInput — receives mic audio [Net, Stream]
+  stt: DeepgramSTT — speech-to-text [Llm, Net, Stream]
+  llm: OpenAILLM — generates the response [Llm, Net, Stream]
+  tts: CartesiaTTS — text-to-speech [Net, Stream]
+  transport_out: WebRTCOutput — plays audio to the peer [Net, Stream]
+@edges
+  transport_in -> stt : AudioRawFrame [downstream]
+  stt -> llm : TranscriptionFrame [downstream]
+  llm -> tts : TextFrame [downstream]
+  tts -> transport_out : AudioRawFrame [downstream]
+  transport_out -> llm : StartInterruptionFrame [upstream]
+  transport_out -> tts : StartInterruptionFrame [upstream]
+@effects [Llm, Net, Stream]
+@antipatterns
+  - Don't block inside process_frame — the pipeline runs frames on a single task; blocking stalls all audio.
+  - Don't ignore StartInterruptionFrame — without handling it upstream, the bot keeps talking over the user.
+@example
+  pipeline = Pipeline([
+      transport_in, stt, llm, tts, transport_out,
+  ])
+  task = PipelineTask(pipeline, params=PipelineParams(allow_interruptions=True))
+  await PipelineRunner().run(task)
+
+---
+
+@invariants
+  - Frames flow downstream by default; only control/interruption frames travel upstream.
+    [src: voice/assistant.py:55-72]
+  - allow_interruptions=True is required for StartInterruptionFrame to cancel in-flight LLM/TTS work.
+    [src: voice/assistant.py:110-118]
+
+---
+
+@workflow handle_barge_in
+@purpose Cancel the bot's current response when the user starts speaking
+@steps
+  1. Detect: transport_out / VAD emits StartInterruptionFrame upstream
+  2. Cancel: llm and tts receive the frame and abort in-flight generation
+  3. Flush: queued downstream audio frames are dropped
+  4. Resume: stt processes the new user audio and the loop continues
+@antipatterns
+  - Don't finish the current TTS playback before reacting — latency makes the bot feel non-interruptible.
+@example
+  task = PipelineTask(pipeline, params=PipelineParams(allow_interruptions=True))

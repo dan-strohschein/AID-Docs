@@ -18,7 +18,10 @@ AID/
 └── examples/
     ├── http-client.aid        # HTTP client module example
     ├── collections-hashmap.aid # Generic collections example
-    └── events-emitter.aid     # Async/callback patterns example
+    ├── events-emitter.aid     # Async/callback patterns example
+    ├── langgraph-react-agent.aid # Tier 4: LangGraph agent (graph/cycles/tools/state)
+    ├── pipecat-voice-bot.aid  # Tier 4: Pipecat pipeline (frames/streaming)
+    └── langchain-rag.aid      # Tier 4: LangChain LCEL composition (RAG)
 ```
 
 ### Purpose

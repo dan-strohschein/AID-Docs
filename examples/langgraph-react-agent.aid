@@ -1,0 +1,220 @@
+@module agents/react
+@lang python
+@version 0.1.0
+@stability experimental
+@purpose ReAct agent: an LLM reasons, calls tools, observes results, and loops until it answers
+@engine langgraph
+@depends [langgraph, langchain_core, langchain_anthropic]
+@source https://github.com/example/react-agent
+@checkpointer postgres — LangGraph PostgresSaver; conversation state keyed by thread_id
+@test_framework pytest
+@test_cmd pytest tests/test_agent.py
+@aid_version 0.3
+
+---
+
+@type AgentState
+@kind struct
+@channels
+@purpose Shared state threaded through every node of the agent_loop graph
+@fields
+  messages: [Message] — full conversation incl. tool calls and results. reducer: append.
+  step_count: int — number of reason→act cycles taken. reducer: add. Default 0.
+  next: str — routing decision written by the planner node. reducer: last-wins.
+@invariants
+  - messages always starts with a system message and a human message
+  - step_count is monotonically non-decreasing
+@constructors None — created by the runtime when the graph is invoked with an initial input
+
+---
+
+@type Message
+@kind struct
+@purpose A single conversation turn (human, AI, or tool result)
+@fields
+  role: str — One of: system, human, ai, tool.
+  content: str — Text content, possibly empty when only tool_calls are present.
+  tool_calls: [ToolCall]? — Present on ai messages that request tool invocation.
+@implements [Serializable]
+
+---
+
+@type ToolCall
+@kind struct
+@purpose A model's request to invoke a named tool with arguments
+@fields
+  id: str — Unique call id, echoed back on the tool result.
+  name: str — Tool name. Must match a declared @tool.
+  args: dict[str, any] — Arguments validated against the tool's @schema.
+
+---
+
+@type AgentDecision
+@kind enum
+@purpose Structured output the planner emits to drive routing
+@variants
+  | Act { tool_calls: [ToolCall] } — at least one tool must run before answering
+  | Answer { content: str } — final response, terminate the loop
+@implements [Serializable]
+
+---
+
+@model planner_llm
+@purpose LLM that reasons about the next step and emits an AgentDecision
+@provider anthropic
+@model_id claude-opus-4-8
+@params temperature=0.0, max_tokens=4096
+@structured_output AgentDecision
+@determinism nondeterministic
+@cost input≈$3/Mtok, output≈$15/Mtok
+@effects [Llm, Net]
+
+---
+
+@tool web_search
+@purpose Search the web and return ranked results. Use for current events or unknown facts.
+@sig (query: str, k?: int) -> [SearchResult] ! SearchError
+@params
+  query: Search query. Required. Length [1, 400].
+  k: Number of results. Default 5. Range [1, 20].
+@returns Ranked results, each with title, url, and snippet
+@errors
+  SearchError.RateLimited — provider quota exceeded [origin]
+  SearchError.Network — upstream request failed [origin]
+@schema tools/web_search.schema.json
+@invoked_by llm
+@effects [Net, Tool]
+@determinism nondeterministic — results vary with index state
+@idempotent true
+
+---
+
+@tool execute_sql
+@purpose Run a read-only SQL query against the analytics warehouse
+@sig (query: str) -> [Row] ! SqlError
+@params
+  query: A SELECT statement. Required. Must match ^\s*SELECT.
+@returns Result rows as dicts
+@errors
+  SqlError.Syntax — query failed to parse [origin]
+  SqlError.Forbidden — non-SELECT statement rejected [origin]
+@schema tools/execute_sql.schema.json
+@invoked_by llm
+@effects [Db, Tool]
+@determinism deterministic
+@idempotent true
+
+---
+
+@fn planner_node
+@purpose Call the planner LLM and record its decision in state
+@sig (state: AgentState) -> AgentState
+@params
+  state: Current agent state. Required.
+@returns State with the AI message appended and `next` set to "act" or "answer"
+@effects [Llm, Net]
+@reads [AgentState.messages]
+@writes [AgentState.messages, AgentState.next, AgentState.step_count]
+@calls planner_llm
+@determinism nondeterministic
+
+---
+
+@fn tool_executor
+@purpose Execute every tool call in the last AI message and append results
+@sig (state: AgentState) -> AgentState
+@params
+  state: Agent state whose last message contains tool_calls. Required.
+@returns State with one tool Message appended per executed call
+@errors
+  SearchError — propagated from web_search [from: web_search]
+  SqlError — propagated from execute_sql [from: execute_sql]
+@effects [Tool, Net, Db]
+@reads [AgentState.messages]
+@writes [AgentState.messages]
+@calls web_search, execute_sql
+
+---
+
+@fn should_continue
+@purpose Router: decide whether to run tools or finish, based on the planner's decision
+@sig (state: AgentState) -> str
+@params
+  state: Agent state with `next` set by planner_node. Required.
+@returns "act" if the decision was Act, "END" if it was Answer
+@effects None
+@reads [AgentState.next]
+@determinism deterministic
+
+---
+
+@graph agent_loop
+@purpose ReAct loop: reason, act with tools, observe, repeat until the model answers
+@engine langgraph
+@state AgentState
+@entry plan
+@nodes
+  plan: planner_node — LLM selects the next action [Llm]
+  act: tool_executor — runs every requested tool call [Tool]
+@edges
+  act -> plan
+@conditional_edges
+  plan: should_continue -> act | END — act if the decision is Act, else END
+@cycles
+  plan -> act -> plan — bounded by recursion_limit=25; raises GraphRecursionError if exceeded
+@interrupts
+  before act — human approval required when a tool call targets execute_sql on production
+@effects [Llm, Tool, Net, Db]
+@antipatterns
+  - Don't have tool_executor return the full messages list — the reducer is `append`, so it duplicates history.
+  - Don't omit the should_continue exit edge to END — without it the loop only stops at recursion_limit.
+@example
+  graph = StateGraph(AgentState)
+  graph.add_node("plan", planner_node)
+  graph.add_node("act", tool_executor)
+  graph.set_entry_point("plan")
+  graph.add_conditional_edges("plan", should_continue, {"act": "act", "END": END})
+  graph.add_edge("act", "plan")
+  app = graph.compile(checkpointer=PostgresSaver(...), interrupt_before=["act"])
+  result = app.invoke({"messages": [sys, human]}, config={"configurable": {"thread_id": "t1"}})
+
+---
+
+@agent react_agent
+@purpose Answers questions by reasoning and calling search/SQL tools in a loop
+@model planner_llm
+@system_prompt prompts/react_system.md
+@tools [web_search, execute_sql]
+@autonomy supervised
+@guardrails
+  - Never run a SQL statement that is not a SELECT [src: agents/react.py:88-96]
+  - Stop and answer once enough evidence is gathered; do not loop past recursion_limit
+@memory thread
+@output str
+@effects [Llm, Tool, Net, Db]
+
+---
+
+@invariants
+  - The graph must always terminate via the END edge or the recursion_limit; there is no other exit.
+    [src: agents/react.py:120-145]
+  - Every tool result Message carries the tool_call id it answers, so the model can correlate. [src: agents/react.py:160-172]
+
+---
+
+@workflow run_agent_with_resume
+@purpose Invoke the agent, pause for human approval, then resume
+@steps
+  1. Invoke: app.invoke(input, thread_id) — runs until the `before act` interrupt
+  2. Inspect: read the pending tool_calls from the checkpoint
+  3. Approve: human confirms or edits the tool call
+  4. Resume: app.invoke(None, thread_id) — continues from the interrupt to completion
+@errors_at
+  step 1: GraphRecursionError — loop exceeded recursion_limit without answering
+  step 4: SqlError | SearchError — a tool failed during execution
+@antipatterns
+  - Don't start a fresh thread_id on resume — the checkpoint is keyed by thread_id; a new id loses all state.
+@example
+  app.invoke({"messages": [sys, human]}, config={"configurable": {"thread_id": "t1"}})
+  # ... interrupt fires; human approves ...
+  final = app.invoke(None, config={"configurable": {"thread_id": "t1"}})

@@ -195,6 +195,62 @@ A human (library author or experienced user) reviews the AI-generated AID file a
 - **`Promise<T>`**: Async functions return promises. The AID `@sig` should use `async` keyword and show the resolved type: `async (params) -> T`, not `(params) -> Promise<T>`.
 - **Generics**: TypeScript generics map directly to AID generics. Constraints (`T extends Foo`) map to bounds (`T: Foo`).
 
+### 2.4 Agentic framework extraction (Tier 4)
+
+Tier 4 entries are extracted per **engine** (the framework), not per language — though the named frameworks are Python-first today. The `@engine` field records which mapping below was used. As with the language mappings, much of the topology is **Layer 1 mechanical** (AST analysis of graph-construction calls), while the semantic fields are **Layer 2**.
+
+#### 2.4.1 LangGraph → AID (`@engine langgraph`)
+
+| Source construct | AID field | Layer |
+|-----------------|-----------|-------|
+| `StateGraph(StateType)` | `@graph` + `@state StateType` | L1 |
+| `.add_node("name", fn)` | `@nodes` line `name: fn` | L1 |
+| `.add_edge("a", "b")` | `@edges` line `a -> b` | L1 |
+| `.add_edge(START, "a")` / `.set_entry_point("a")` | `@entry a` | L1 |
+| `.add_edge("a", END)` | `@edges` line `a -> END` | L1 |
+| `.add_conditional_edges("src", router, {"x": "a", "y": END})` | `@conditional_edges` line `src: router -> a \| END` | L1 |
+| Back-edge present (target precedes source) | `@cycles` entry (bound from `recursion_limit`) | L1 topology, L2 bound rationale |
+| `State` TypedDict with `Annotated[T, reducer]` fields | `@type @channels` + `reducer:` constraints | L1 |
+| `Annotated[list, add_messages]` / `operator.add` | `reducer: append` / `reducer: add` | L1 |
+| `.compile(interrupt_before=["n"])` / `interrupt_after` | `@interrupts` line `before n` | L1 |
+| `.compile(checkpointer=X)` | header `@checkpointer` + `@memory thread` | L1 |
+| `@tool` decorator / `StructuredTool.from_function` | `@tool` entry + `@invoked_by llm` | L1 |
+| node that calls a model | node `[Llm]` effect | L2 |
+| loop-termination condition, guardrails, failure modes | `@cycles` bound, `@guardrails`, `@failure_modes` | L2 |
+
+#### 2.4.2 LangChain / LCEL → AID (`@engine lcel`)
+
+| Source construct | AID field | Layer |
+|-----------------|-----------|-------|
+| `a \| b \| c` (RunnableSequence) | `@graph @composition sequence` with ordered `@edges` | L1 |
+| `RunnableParallel({...})` | `@composition parallel` | L1 |
+| `RunnableBranch(...)` | `@composition branch` | L1 |
+| `.with_fallbacks([...])` | `@composition fallback` | L1 |
+| `.map()` | `@composition map` | L1 |
+| `ChatPromptTemplate.from_messages(...)` | `@prompt` + `@inputs` from template variables | L1 |
+| `ChatAnthropic(...)` / `ChatOpenAI(...)` | `@model` + `@provider`/`@model_id`/`@params` | L1 |
+| `.with_structured_output(Schema)` | `@model @structured_output Schema` | L1 |
+| `@tool` / `Tool(...)` | `@tool` entry | L1 |
+| retriever (`vectorstore.as_retriever()`) | `@tool` with `[Embed, Net]` effects | L1 mechanical, L2 effect classification |
+| prompt failure modes, determinism rationale | `@failure_modes`, `@determinism` | L2 |
+
+#### 2.4.3 Pipecat → AID (`@engine pipecat`)
+
+| Source construct | AID field | Layer |
+|-----------------|-----------|-------|
+| `Pipeline([p1, p2, ...])` | `@graph @engine pipecat` with ordered `@edges` | L1 |
+| `FrameProcessor` subclass | `@nodes` entry | L1 |
+| `ParallelPipeline([...])` | `@composition parallel` | L1 |
+| `Frame` subclass | `@frames` entry | L1 |
+| `push_frame(frame, FrameDirection.DOWNSTREAM)` | edge `: FrameType [downstream]` | L1 mechanical, L2 to resolve which edge |
+| STT / LLM / TTS service classes | nodes with `[Llm]` / `[Stream]` / `[Net]` effects | L2 |
+| interruption handling (`StartInterruptionFrame`) | upstream `@frames` entry + edge | L1 |
+
+#### Layer split for Tier 4
+
+- **Layer 1 (mechanical):** graph topology (`@nodes`, `@edges`, `@conditional_edges`, `@entry`), reducer annotations from `Annotated[...]`, `@interrupts` from compile flags, `@tool`/`@model`/`@prompt` skeletons, `@engine`. A back-edge is detectable mechanically, so the *existence* of a cycle is L1.
+- **Layer 2 (semantic):** the cycle's **bound and termination rationale**, node `@effects` classification (`Llm`/`Tool`/`Stream`), `@guardrails`, `@failure_modes`, `@determinism` judgments, and `@antipatterns`. As elsewhere, L2 claims should carry `[src:]` references for verification.
+
 ---
 
 ## 3. Generation pipeline
